@@ -261,17 +261,38 @@ Panel {
                 id: switcherRow
                 required property var modelData
                 required property int index
-                width: parent.width
+                readonly property bool isActive: modelData.id === printer.activePrinterId
+                // Breaks out of content's left/right padding so the
+                // hover/selected fill runs edge-to-edge instead of stopping
+                // at the list's own inset — the content below (name, gear)
+                // gets that same inset back explicitly, so only the paint,
+                // not the layout, is full-bleed.
+                anchors.left: parent.left
+                anchors.leftMargin: -Style.space(16)
+                anchors.right: parent.right
+                anchors.rightMargin: -Style.space(16)
                 height: switcherRowContent.implicitHeight + Style.spacing.rowPaddingX
                 radius: Style.cornerRadius
-                color: modelData.id === printer.activePrinterId
+                color: isActive
                   ? Style.selectedFillFor(root.foreground, Color.accent)
-                  : (root.cursorActive && index === root.switcherIndex ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+                  : (rowHoverArea.containsMouse || (root.cursorActive && index === root.switcherIndex) ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+
+                // Full-row hover detection (for the highlight above and the
+                // gear's reveal-on-hover below) sits underneath the gear's
+                // own, smaller mouse area — declared first, so it's beneath
+                // in z-order and never steals a click meant for the gear.
+                MouseArea {
+                  id: rowHoverArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: printer.setActivePrinter(switcherRow.modelData.id)
+                }
 
                 Row {
                   id: switcherRowContent
                   anchors.left: parent.left
-                  anchors.leftMargin: Style.space(12)
+                  anchors.leftMargin: Style.space(16)
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(8)
 
@@ -298,8 +319,12 @@ Panel {
 
                 GearIcon {
                   id: gearButton
+                  // Only the selected printer's gear stays put — everyone
+                  // else's only appears while its row is actually hovered,
+                  // so the list doesn't read as five gears at rest.
+                  visible: switcherRow.isActive || rowHoverArea.containsMouse
                   anchors.right: parent.right
-                  anchors.rightMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(16)
                   anchors.verticalCenter: parent.verticalCenter
                   color: gearArea.containsMouse ? root.foreground : root.dim
 
@@ -315,16 +340,6 @@ Panel {
                     onClicked: root.startEditPrinter(switcherRow.modelData)
                   }
                 }
-
-                MouseArea {
-                  // Stops short of the gear's own (slightly larger) click
-                  // target so the two hit regions never overlap — no click
-                  // on the gear can also switch the active printer.
-                  anchors.fill: parent
-                  anchors.rightMargin: gearButton.width + Style.space(20)
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: printer.setActivePrinter(switcherRow.modelData.id)
-                }
               }
             }
 
@@ -334,7 +349,13 @@ Panel {
               height: addPrinterContent.implicitHeight + Style.spacing.rowPaddingX
 
               Rectangle {
-                anchors.fill: parent
+                // Same edge-to-edge break-out as the printer rows above.
+                anchors.left: parent.left
+                anchors.leftMargin: -Style.space(16)
+                anchors.right: parent.right
+                anchors.rightMargin: -Style.space(16)
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
                 radius: Style.cornerRadius
                 color: addPrinterArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
               }
@@ -342,7 +363,7 @@ Panel {
               Row {
                 id: addPrinterContent
                 anchors.left: parent.left
-                anchors.leftMargin: Style.space(12)
+                anchors.leftMargin: Style.space(16)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(8)
 
@@ -559,14 +580,6 @@ Panel {
                 onClicked: printer.restartFirmware()
               }
             }
-          }
-
-          Rectangle {
-            visible: !root.addingPrinter && (printer.printers.length > 0 || printer.activePrinter !== null)
-            width: parent.width - parent.leftPadding - parent.rightPadding
-            height: Style.spacing.hairline
-            color: root.foreground
-            opacity: 0.12
           }
 
           // ---- add/edit printer form ----
@@ -836,22 +849,29 @@ Panel {
     width: implicitWidth
     height: implicitHeight
 
+    // 8 small squares (slightly rounded, not sharp points) evenly spaced
+    // around the hub, each half-covered by the hub circle below so only
+    // its outer half pokes out as a flat-topped tooth — reads as a cog,
+    // not a spiky star, at this size.
+    readonly property real toothSize: width * 0.22
+    readonly property real toothCenterDistance: width * 0.35
+
+    Repeater {
+      model: 8
+      Rectangle {
+        required property int index
+        width: gear.toothSize
+        height: gear.toothSize
+        radius: width * 0.2
+        color: gear.color
+        x: gear.width / 2 + gear.toothCenterDistance * Math.cos(index * Math.PI / 4) - width / 2
+        y: gear.height / 2 + gear.toothCenterDistance * Math.sin(index * Math.PI / 4) - height / 2
+      }
+    }
+
     Rectangle {
       anchors.centerIn: parent
       width: parent.width * 0.62
-      height: width
-      color: gear.color
-    }
-    Rectangle {
-      anchors.centerIn: parent
-      width: parent.width * 0.62
-      height: width
-      rotation: 45
-      color: gear.color
-    }
-    Rectangle {
-      anchors.centerIn: parent
-      width: parent.width * 0.68
       height: width
       radius: width / 2
       color: gear.color
