@@ -39,6 +39,11 @@ either of those web UIs, this plugin can talk to it too.
   metadata — the file shows up with no thumbnail, no estimated time, no
   filament usage. Point the watcher at that share and each new `.gcode`
   landing there is scanned on every reachable printer automatically.
+- Click a camera feed to open it fullscreen, with the printer's name,
+  status, file and progress drawn over it. Which fields appear is chosen
+  per printer in its edit form. Escape or a click dismisses it; it is also
+  on IPC (`qs -p /usr/share/omarchy/shell ipc call klipper fullscreen`) so
+  it can be bound to a key.
 - Live webcam feed(s) inline in the popup, when the printer has one —
   discovered automatically via Moonraker, correctly oriented per its own
   flip/rotation settings. Falls back to a periodically-refreshed still

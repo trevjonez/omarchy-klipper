@@ -51,6 +51,20 @@ Panel {
   // other.
   property bool settingsOpen: false
 
+  // Fullscreen camera view. Identified by printer + webcam index rather than
+  // by the webcam record, so the same view serves the all-cameras panel later.
+  property string fullscreenPrinterId: ""
+  property int fullscreenWebcamIndex: 0
+
+  function openFullscreenCamera(printerId, index) {
+    fullscreenPrinterId = printerId
+    fullscreenWebcamIndex = index
+    // The popup is an overlay surface holding the keyboard; leaving it up
+    // behind a fullscreen feed just fights over focus.
+    close()
+    settingsOpen = false
+  }
+
   function selectedSwitcherPrinter() {
     if (printer.printers.length === 0) return null
     var idx = Math.max(0, Math.min(switcherIndex, printer.printers.length - 1))
@@ -600,6 +614,14 @@ Panel {
                   aspectRatio: modelData.aspectRatio
                   foreground: root.foreground
                   fontFamily: root.fontFamily
+
+                  required property int index
+
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openFullscreenCamera(printer.activePrinterId, parent.index)
+                  }
                 }
               }
             }
@@ -938,6 +960,15 @@ Panel {
     }
   }
 
+  FullscreenVideo {
+    id: fullscreenVideo
+    service: printer
+    printerId: root.fullscreenPrinterId
+    webcamIndex: root.fullscreenWebcamIndex
+    open: root.fullscreenPrinterId !== ""
+    onCloseRequested: root.fullscreenPrinterId = ""
+  }
+
   // KeyboardPanel.owner doubles as the bar's popout-coordinator key, so the
   // settings panel needs an owner distinct from `root` for the bar to treat
   // the two popups as rivals and close one when the other opens. It only has
@@ -962,6 +993,13 @@ Panel {
     function toggle(): void { root.settingsOpen = false; root.toggle() }
 
     function openSettings(): void { root.close(); root.settingsOpen = true }
+
+    // Fullscreen the active printer's first camera, so it can be bound to a
+    // key rather than only reachable by clicking the feed in the popup.
+    function fullscreen(): void {
+      if (printer.activePrinterId !== "") root.openFullscreenCamera(printer.activePrinterId, 0)
+    }
+    function closeFullscreen(): void { root.fullscreenPrinterId = "" }
     function closeSettings(): void { root.settingsOpen = false }
     function toggleSettings(): void {
       if (root.settingsOpen) { root.settingsOpen = false; return }

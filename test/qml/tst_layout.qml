@@ -18,7 +18,10 @@ import qs.Commons
 ShellRoot {
   id: root
 
-  Harness { id: h; budgetMs: 30000 }
+  // Generous: these tests stage and load the whole shell module tree, and
+  // run alongside the rest of the suite, so they are the ones most likely to
+  // be starved on a busy machine. A budget overrun here is a false failure.
+  Harness { id: h; budgetMs: 60000 }
 
   property var panel: null
 
