@@ -133,12 +133,23 @@ Item {
     return (printer && (printer.scheme === "http" || printer.scheme === "https")) ? printer.scheme : "http"
   }
 
+  // Guards against re-sending the same notification for the same printer.
+  // PrinterConnection already only calls this on an actual state transition,
+  // so this is a backstop; it is keyed per printer because one global slot let
+  // any printer's notification mask another's, and let a repeated event (stop,
+  // restart, stop again) be swallowed because the silent recovery in between
+  // never displaced the stored key.
   function sendNotification(printerId, notif) {
-    var key = printerId + "|" + notif.headline
-    if (persisted.notifiedFor === key) return
-    persisted.notifiedFor = key
+    var seen = {}
+    try { seen = JSON.parse(persisted.notifiedFor || "{}") } catch (e) { seen = {} }
+    if (!isPlainObject(seen)) seen = {}
+    if (seen[printerId] === notif.headline) return
+    seen[printerId] = notif.headline
+    persisted.notifiedFor = JSON.stringify(seen)
     Quickshell.execDetached(["omarchy-notification-send", "-u", notif.urgency, notif.headline, notif.body])
   }
+
+  function isPlainObject(v) { return !!v && typeof v === "object" && !Array.isArray(v) }
 
   PersistentProperties {
     id: persisted

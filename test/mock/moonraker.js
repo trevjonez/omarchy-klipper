@@ -30,6 +30,8 @@ const cfg = {
   metascanStatus: Number(process.env.MOCK_METASCAN_STATUS || 200),
   // Close every websocket this many ms after subscribing, to drive reconnect.
   dropAfterMs: Number(process.env.MOCK_DROP_AFTER_MS || 0),
+  klippyState: process.env.MOCK_KLIPPY_STATE || 'ready',
+  klippyMessage: process.env.MOCK_KLIPPY_MESSAGE || 'Emergency stop',
   objects: (process.env.MOCK_OBJECTS ||
     'webhooks,print_stats,display_status,virtual_sdcard,extruder,heater_bed,heater_generic drybox,bme280 Chamber,temperature_sensor Ambient').split(','),
 };
@@ -85,7 +87,11 @@ function* decodeFrames(state, chunk) {
 
 function statusSnapshot() {
   const status = {
-    webhooks: { state: 'ready', state_message: 'Printer is ready' },
+    // Klipper itself can be down (emergency stop, MCU fault); that outranks
+    // whatever print_stats last reported.
+    webhooks: cfg.klippyState === 'ready'
+      ? { state: 'ready', state_message: 'Printer is ready' }
+      : { state: cfg.klippyState, state_message: cfg.klippyMessage },
     print_stats: {
       state: cfg.state,
       filename: cfg.filename,
@@ -153,10 +159,16 @@ const server = http.createServer((req, res) => {
     case '/__mock/state': {
       const next = url.searchParams.get('state');
       if (next) cfg.state = next;
+      if (url.searchParams.has('klippy')) cfg.klippyState = url.searchParams.get('klippy');
       if (url.searchParams.has('filename')) cfg.filename = url.searchParams.get('filename');
       if (url.searchParams.has('progress')) cfg.progress = Number(url.searchParams.get('progress'));
-      pushStatus({ print_stats: { state: cfg.state, filename: cfg.filename, message: '' },
-                   display_status: { progress: cfg.progress } });
+      pushStatus({
+        webhooks: cfg.klippyState === 'ready'
+          ? { state: 'ready', state_message: 'Printer is ready' }
+          : { state: cfg.klippyState, state_message: cfg.klippyMessage },
+        print_stats: { state: cfg.state, filename: cfg.filename, message: '' },
+        display_status: { progress: cfg.progress },
+      });
       return json(200, { result: 'ok' });
     }
 

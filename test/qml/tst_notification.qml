@@ -33,6 +33,12 @@ ShellRoot {
   Process { id: notifyProcess; running: false; command: [] }
   Process { id: poke; running: false; command: [] }
 
+  function poke(query) {
+    poke.command = ["curl", "-fsS", "-o", "/dev/null",
+      "http://127.0.0.1:" + root.mockPort + "/__mock/state?" + query]
+    poke.running = true
+  }
+
   Plugin.PrinterConnection {
     id: conn
     printerId: "p1"
@@ -50,18 +56,25 @@ ShellRoot {
       h.check("no notification merely for being mid-print", root.seen.length === 0,
               JSON.stringify(root.seen))
 
-      poke.command = ["curl", "-fsS", "-o", "/dev/null",
-        "http://127.0.0.1:" + root.mockPort + "/__mock/state?state=complete&progress=1"]
-      poke.running = true
+      root.poke("state=complete&progress=1")
 
       h.waitFor("completion produces a notification", function() { return root.seen.length > 0 }, function() {
         var n = root.seen[0]
         h.check("headline names the printer", String(n.headline).indexOf("Voron") !== -1, n.headline)
         h.check("body names the file", String(n.body).indexOf("demo.gcode") !== -1, n.body)
-        // Give the stub's write a moment to land before the runner reads it.
-        h.waitFor("notification command ran", function() { return !notifyProcess.running }, function() {
-          h.done()
-        })
+
+        // Emergency stop: Klipper goes down, which arrives as a webhooks state
+        // rather than a print state. This notified nothing at all before.
+        root.poke("klippy=shutdown")
+        h.waitFor("emergency stop produces a notification",
+                  function() { return root.seen.length > 1 }, function() {
+          var stop = root.seen[root.seen.length - 1]
+          h.checkEq("stop is critical", stop.urgency, "critical")
+          h.check("stop headline says Klipper is down",
+                  String(stop.headline).toLowerCase().indexOf("shut down") !== -1, stop.headline)
+          h.waitFor("notification commands ran", function() { return !notifyProcess.running },
+                    function() { h.done() })
+        }, 15000)
       })
     })
   }

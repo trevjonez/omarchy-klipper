@@ -591,6 +591,11 @@ function formatSensorEntry(reading, field) {
 
 var BUSY_STATES = { printing: true, paused: true };
 var TERMINAL_STATES = { complete: true, cancelled: true, error: true };
+// Klipper itself going down: an emergency stop, a thermal runaway, an MCU
+// fault. Unlike the terminal print states these matter regardless of what the
+// printer was doing beforehand -- an e-stop from idle still leaves a machine
+// that needs a firmware restart before it will do anything.
+var HALT_STATES = { klippy_shutdown: true, klippy_error: true };
 
 // Normalizes a raw Moonraker status object — the `result.status` shape
 // shared by /printer/objects/query's response AND printer.objects.subscribe's
@@ -797,10 +802,32 @@ function estimateRemainingSec(progressPercent, elapsedSec) {
 // Only fires leaving a busy (printing/paused) state for a terminal one, so
 // polling noise and the initial load (prevState === "") never notify.
 function notificationForTransition(prevState, nextState, printerName, filename, message) {
+  // No previous state means this is the first reading after connecting, not a
+  // transition: a printer that was already shut down when the shell started
+  // should not announce itself.
   if (!prevState || prevState === nextState) return null;
-  if (!BUSY_STATES[prevState] || !TERMINAL_STATES[nextState]) return null;
 
   var subject = filename ? " — " + filename : "";
+
+  if (HALT_STATES[nextState]) {
+    return {
+      urgency: "critical",
+      headline: printerName + (nextState === "klippy_error" ? ": Klipper error" : ": Klipper shut down"),
+      body: message || "Emergency stop or firmware fault — restart Klipper to continue"
+    };
+  }
+
+  // Starting a job is worth knowing about, but resuming a paused one is not a
+  // new print, so only count it when the printer was not already busy.
+  if (nextState === "printing" && !BUSY_STATES[prevState]) {
+    return {
+      urgency: "low",
+      headline: printerName + ": print started",
+      body: filename || "Print started"
+    };
+  }
+
+  if (!BUSY_STATES[prevState] || !TERMINAL_STATES[nextState]) return null;
   if (nextState === "complete") {
     return { urgency: "normal", headline: printerName + ": print complete", body: (filename || "Print") + " finished" };
   }
@@ -869,6 +896,7 @@ if (typeof module !== "undefined") {
     websocketUrl: websocketUrl,
     parseInfoResponse: parseInfoResponse,
     jobInProgress: jobInProgress,
+    HALT_STATES: HALT_STATES,
     stateLabel: stateLabel,
     stateTone: stateTone,
     formatDuration: formatDuration,

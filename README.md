@@ -30,8 +30,10 @@ either of those web UIs, this plugin can talk to it too.
   Klipper after an error.
 - Multiple printers: add as many as you like, switch which one is shown
   in the bar from the popup.
-- Desktop notification when any configured printer's print completes, is
-  cancelled, or errors — whether or not it's the one currently selected.
+- Desktop notifications for any configured printer, whether or not it's the
+  one currently selected: a print starting, completing, being cancelled or
+  failing, and — critically — Klipper shutting down, which is what an
+  emergency stop from any client looks like.
 - Add/edit form has a "Test" button: it hits Moonraker before you save,
   fills the Name field in from the printer's own reported hostname if you
   left it blank, and pins down http vs https for you.

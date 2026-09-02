@@ -399,8 +399,10 @@ test('durations and remaining-time estimate', () => {
 
 test('notificationForTransition fires only on meaningful changes', () => {
   assert.equal(M.notificationForTransition('printing', 'printing', 'Voron', 'a.gcode', ''), null);
-  assert.equal(M.notificationForTransition('', 'printing', 'Voron', 'a.gcode', ''), null,
-    'starting from unknown state does not notify');
+  // First reading after connecting is not a transition -- a printer that was
+  // already shut down when the shell started should not announce itself.
+  assert.equal(M.notificationForTransition('', 'printing', 'Voron', 'a.gcode', ''), null);
+  assert.equal(M.notificationForTransition('', 'klippy_shutdown', 'Voron', '', ''), null);
 
   const done = M.notificationForTransition('printing', 'complete', 'Voron', 'a.gcode', '');
   assert.ok(done, 'completion notifies');
@@ -413,6 +415,41 @@ test('notificationForTransition fires only on meaningful changes', () => {
   assert.match(err.body, /thermal runaway/);
 
   assert.ok(M.notificationForTransition('printing', 'cancelled', 'Voron', 'a.gcode', ''));
+});
+
+test('an emergency stop notifies whatever the printer was doing', () => {
+  // Hitting e-stop in Mainsail shuts Klipper down, which surfaces as
+  // klippy_shutdown rather than a print state. That used to notify nothing at
+  // all -- the most alarming event the plugin can see was the silent one.
+  for (const prev of ['printing', 'paused', 'standby', 'complete', 'error']) {
+    const n = M.notificationForTransition(prev, 'klippy_shutdown', 'Voron', 'a.gcode', '');
+    assert.ok(n, `no notification from ${prev}`);
+    assert.equal(n.urgency, 'critical', prev);
+    assert.match(n.headline, /shut down/i);
+  }
+  // An e-stop from idle still matters: the machine needs a firmware restart
+  // before it will do anything.
+  assert.ok(M.notificationForTransition('standby', 'klippy_shutdown', 'Voron', '', ''));
+
+  const fault = M.notificationForTransition('printing', 'klippy_error', 'Voron', 'a.gcode', 'MCU shutdown');
+  assert.ok(fault);
+  assert.equal(fault.urgency, 'critical');
+  assert.match(fault.body, /MCU shutdown/);
+
+  // Recovering is not itself an alarm.
+  assert.equal(M.notificationForTransition('klippy_shutdown', 'standby', 'Voron', '', ''), null);
+});
+
+test('starting a print notifies, resuming one does not', () => {
+  for (const prev of ['standby', 'complete', 'cancelled', 'error']) {
+    const n = M.notificationForTransition(prev, 'printing', 'Voron', 'a.gcode', '');
+    assert.ok(n, `no notification from ${prev}`);
+    assert.match(n.headline, /started/i);
+    assert.match(n.body, /a\.gcode/);
+    assert.equal(n.urgency, 'low', 'a start is informational, not urgent');
+  }
+  // Resuming is not a new print.
+  assert.equal(M.notificationForTransition('paused', 'printing', 'Voron', 'a.gcode', ''), null);
 });
 
 // ------------------------------------------------------------ responses
