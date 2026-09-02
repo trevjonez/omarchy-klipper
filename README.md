@@ -18,8 +18,12 @@ either of those web UIs, this plugin can talk to it too.
   error / unreachable), with the toolhead sweeping the icon's rail
   proportional to print progress.
 - Popup with live progress, elapsed/remaining time, filename, and
-  hotend/bed temperatures. The printer switcher shows live reachability
-  for every configured printer, not just the active one.
+  temperatures. Defaults to whatever's controllable (hotend, bed, any
+  extra heaters like a heated chamber or drybox) — edit a printer to pick
+  from everything else it exposes (chamber/ambient temps, humidity,
+  pressure, individually per field for a sensor that reports more than
+  one). The printer switcher shows live reachability for every configured
+  printer, not just the active one.
 - Pause, resume, cancel (confirm), emergency stop (confirm), and restart
   Klipper after an error.
 - Multiple printers: add as many as you like, switch which one is shown
