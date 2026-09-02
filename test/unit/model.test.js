@@ -97,6 +97,33 @@ test('app settings keep intent separate from ability to run', () => {
   assert.equal(M.normalizeAppSettings({ lastSeenEpoch: 'garbage' }).lastSeenEpoch, 0);
 });
 
+test('video overlay selection', () => {
+  // Absent means "never customized" and gets a sensible default set; an empty
+  // array means the user turned every overlay off and must survive as such.
+  assert.deepEqual(M.normalizePrinter({ host: 'h' }, 'x').videoOverlays, M.DEFAULT_VIDEO_OVERLAYS);
+  assert.deepEqual(M.normalizePrinter({ host: 'h', videoOverlays: [] }, 'x').videoOverlays, []);
+
+  // Unknown keys would render as blank overlay rows, and duplicates as
+  // repeated ones, so both are dropped on the way in.
+  assert.deepEqual(M.normalizeVideoOverlays(['name', 'bogus', 'name', 'progress']), ['name', 'progress']);
+  assert.deepEqual(M.normalizeVideoOverlays('not an array'), M.DEFAULT_VIDEO_OVERLAYS);
+
+  for (const f of M.VIDEO_OVERLAY_FIELDS) {
+    assert.ok(M.isVideoOverlayKey(f.key), f.key);
+    assert.equal(M.videoOverlayLabel(f.key), f.label);
+  }
+  assert.ok(!M.isVideoOverlayKey('nope'));
+  // Every default has to be a real field, or it would silently do nothing.
+  for (const key of M.DEFAULT_VIDEO_OVERLAYS) assert.ok(M.isVideoOverlayKey(key), key);
+
+  // Survives a save/load cycle rather than reverting to defaults.
+  const saved = M.parsePrinters(M.serializePrinters({
+    activePrinterId: 'a',
+    printers: [M.normalizePrinter({ id: 'a', host: 'h', videoOverlays: ['status'] }, 'a')],
+  }));
+  assert.deepEqual(saved.printers[0].videoOverlays, ['status']);
+});
+
 // ------------------------------------------------------------ gcode paths
 
 test('relativeGcodePath maps only files Moonraker could scan', () => {

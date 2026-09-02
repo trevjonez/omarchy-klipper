@@ -74,7 +74,9 @@ function normalizePrinter(raw, fallbackId) {
     // (for a multi-output sensor like bme280). [] means "not customized
     // yet" — the connection auto-seeds this to the printer's heaters on
     // first successful connect.
-    displaySensors: Array.isArray(p.displaySensors) ? p.displaySensors.map(normalizeDisplaySensorEntry).filter(Boolean) : []
+    displaySensors: Array.isArray(p.displaySensors) ? p.displaySensors.map(normalizeDisplaySensorEntry).filter(Boolean) : [],
+    // Which fields to draw over this printer's fullscreen camera feed.
+    videoOverlays: normalizeVideoOverlays(p.videoOverlays)
   };
 }
 
@@ -95,6 +97,54 @@ function clonePrinterWith(printer, overrides) {
   if (!base.displaySensors) base.displaySensors = [];
   for (var override in (overrides || {})) base[override] = overrides[override];
   return base;
+}
+
+// ------------------------------------------------------- video overlays
+
+// What can be drawn over a fullscreen camera feed. A fixed catalogue rather
+// than free text: each key maps to a value the panel already has live, and
+// the picker renders straight from this list.
+var VIDEO_OVERLAY_FIELDS = [
+  { key: "name", label: "Printer name" },
+  { key: "status", label: "Status" },
+  { key: "filename", label: "File name" },
+  { key: "progress", label: "Progress" },
+  { key: "elapsed", label: "Elapsed time" },
+  { key: "remaining", label: "Time remaining" },
+  { key: "temps", label: "Temperatures" }
+];
+
+// Enough to identify the feed and see how the job is going, without covering
+// much of the picture.
+var DEFAULT_VIDEO_OVERLAYS = ["name", "status", "filename", "progress"];
+
+function isVideoOverlayKey(key) {
+  for (var i = 0; i < VIDEO_OVERLAY_FIELDS.length; i++) {
+    if (VIDEO_OVERLAY_FIELDS[i].key === key) return true;
+  }
+  return false;
+}
+
+function videoOverlayLabel(key) {
+  for (var i = 0; i < VIDEO_OVERLAY_FIELDS.length; i++) {
+    if (VIDEO_OVERLAY_FIELDS[i].key === key) return VIDEO_OVERLAY_FIELDS[i].label;
+  }
+  return key;
+}
+
+// An absent key means "never customized" and gets the defaults; an empty
+// array means the user deliberately turned everything off, and is preserved.
+function normalizeVideoOverlays(raw) {
+  if (!Array.isArray(raw)) return DEFAULT_VIDEO_OVERLAYS.slice();
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var key = trimmed(raw[i]);
+    if (!isVideoOverlayKey(key) || seen[key]) continue;
+    seen[key] = true;
+    out.push(key);
+  }
+  return out;
 }
 
 // Validates one persisted {object, field?} selection entry.
@@ -732,6 +782,11 @@ if (typeof module !== "undefined") {
     parseWebcamsResponse: parseWebcamsResponse,
     parseAspectRatio: parseAspectRatio,
     normalizeDisplaySensorEntry: normalizeDisplaySensorEntry,
+    VIDEO_OVERLAY_FIELDS: VIDEO_OVERLAY_FIELDS,
+    DEFAULT_VIDEO_OVERLAYS: DEFAULT_VIDEO_OVERLAYS,
+    isVideoOverlayKey: isVideoOverlayKey,
+    videoOverlayLabel: videoOverlayLabel,
+    normalizeVideoOverlays: normalizeVideoOverlays,
     DEFAULT_APP_SETTINGS: DEFAULT_APP_SETTINGS,
     normalizeAppSettings: normalizeAppSettings,
     GCODE_EXTS: GCODE_EXTS,

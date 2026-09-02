@@ -69,6 +69,22 @@ Panel {
     return false
   }
 
+  // Working copy of the fullscreen-overlay selection while the edit form is
+  // open, applied by Save like every other field in the form.
+  property var editingVideoOverlays: []
+
+  function isOverlaySelected(key) {
+    return editingVideoOverlays.indexOf(key) !== -1
+  }
+
+  function toggleOverlaySelection(key) {
+    var list = editingVideoOverlays.slice()
+    var idx = list.indexOf(key)
+    if (idx !== -1) list.splice(idx, 1)
+    else list.push(key)
+    editingVideoOverlays = list
+  }
+
   function toggleSensorSelection(object, field) {
     var list = editingSensorSelection.slice()
     var idx = -1
@@ -103,6 +119,7 @@ Panel {
     confirmRemovePrinter = false
     printer.resetTestState()
     editingSensorSelection = []
+    editingVideoOverlays = Model.DEFAULT_VIDEO_OVERLAYS.slice()
     Qt.callLater(function() {
       nameField.text = ""
       hostField.text = ""
@@ -119,6 +136,7 @@ Panel {
     confirmRemovePrinter = false
     printer.resetTestState()
     editingSensorSelection = (p.displaySensors || []).slice()
+    editingVideoOverlays = (p.videoOverlays || []).slice()
     // No live connection exists yet for a printer that doesn't exist until
     // Save, so this only ever runs for an already-configured printer —
     // it's already connected, so discovery can run immediately.
@@ -139,6 +157,7 @@ Panel {
     printer.resetTestState()
     printer.clearEditDiscovery()
     editingSensorSelection = []
+    editingVideoOverlays = []
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -150,8 +169,17 @@ Panel {
     printer.removePrinter(id)
   }
 
+  // The record being edited, so the form can tell whether this printer has
+  // any cameras at all.
+  readonly property var editingPrinter: editingPrinterId === ""
+    ? null : Model.findPrinter(printer.printers, editingPrinterId)
+  readonly property int editingWebcamCount:
+    editingPrinter && editingPrinter.webcams ? editingPrinter.webcams.length : 0
+
   function currentFormFields() {
-    return { name: nameField.text, host: hostField.text, port: portField.text, apiKey: apiKeyField.text, displaySensors: editingSensorSelection }
+    return { name: nameField.text, host: hostField.text, port: portField.text,
+             apiKey: apiKeyField.text, displaySensors: editingSensorSelection,
+             videoOverlays: editingVideoOverlays }
   }
 
   function testCurrentForm() {
@@ -792,6 +820,72 @@ Panel {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.toggleSensorSelection(sensorRow.modelData.object, sensorRow.modelData.field)
+                  }
+                }
+              }
+            }
+
+            // ---- fullscreen video overlays -----------------------------
+            // Only meaningful for a printer that actually has a camera, so
+            // the whole section stays out of the way otherwise.
+            Column {
+              visible: root.editingWebcamCount > 0
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                text: "Fullscreen video overlays"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle
+              }
+
+              Text {
+                text: "Drawn over this printer's camera when opened fullscreen."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+                width: parent.width
+              }
+
+              Repeater {
+                model: Model.VIDEO_OVERLAY_FIELDS
+
+                Item {
+                  id: overlayRow
+                  required property var modelData
+                  width: parent.width
+                  height: overlayRowContent.implicitHeight + Style.space(4)
+
+                  Row {
+                    id: overlayRowContent
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    Rectangle {
+                      width: Style.space(14)
+                      height: Style.space(14)
+                      radius: 3
+                      anchors.verticalCenter: parent.verticalCenter
+                      color: root.isOverlaySelected(overlayRow.modelData.key) ? Color.accent : "transparent"
+                      border.width: 1
+                      border.color: root.isOverlaySelected(overlayRow.modelData.key) ? Color.accent : Qt.darker(root.foreground, 1.6)
+                    }
+                    Text {
+                      text: overlayRow.modelData.label
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.toggleOverlaySelection(overlayRow.modelData.key)
                   }
                 }
               }
