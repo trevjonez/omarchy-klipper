@@ -18,6 +18,9 @@ either of those web UIs, this plugin can talk to it too.
 - Multiple printers: add as many as you like, switch which one is active
   (polled and shown in the bar) from the popup.
 - Desktop notification when a print completes, is cancelled, or errors.
+- Add/edit form has a "Test" button: it hits Moonraker before you save,
+  fills the Name field in from the printer's own reported hostname if you
+  left it blank, and pins down http vs https for you.
 
 ## Requirements
 
@@ -42,7 +45,10 @@ omarchy plugin enable klipper
 
 Click the printer icon in the bar, then "+ Add printer" to configure your
 first printer (host/IP is required; name, port, and API key are optional —
-port defaults to Moonraker's standard 7125).
+port defaults to Moonraker's standard 7125). The Host field accepts a bare
+host/IP, a `host:port`, or a full URL — a plain host tries http then https
+automatically and remembers whichever answered; pasting an explicit
+`https://…` URL pins that scheme instead of probing.
 
 ## Configuration
 

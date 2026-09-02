@@ -22,15 +22,49 @@ function clampInt(value, fallback, min, max) {
 
 // ---------------------------------------------------------------- printers
 
+// Users paste all sorts of things into a "host" field: a bare hostname, a
+// full URL with scheme, one with an embedded port, a trailing slash/path.
+// Pull out whatever is actually there so the rest of the plugin only ever
+// deals with a clean host, and an explicit scheme/port when the user gave one.
+function parseHostInput(rawHost) {
+  var value = trimmed(rawHost);
+  var scheme = "";
+  var schemeMatch = value.match(/^(https?):\/\//i);
+  if (schemeMatch) {
+    scheme = schemeMatch[1].toLowerCase();
+    value = value.slice(schemeMatch[0].length);
+  }
+  var slash = value.indexOf("/");
+  if (slash !== -1) value = value.slice(0, slash);
+  var port = null;
+  var colon = value.lastIndexOf(":");
+  if (colon !== -1) {
+    var maybePort = value.slice(colon + 1);
+    if (/^\d+$/.test(maybePort)) {
+      port = parseInt(maybePort, 10);
+      value = value.slice(0, colon);
+    }
+  }
+  return { host: value, scheme: scheme, port: port };
+}
+
 // Normalizes one printer entry, filling in a stable shape so the rest of the
-// plugin never has to guard against missing fields.
+// plugin never has to guard against missing fields. `scheme` is "" (unknown —
+// probe http then https and remember whichever answers) whenever neither the
+// host field nor an already-stored scheme pins one down.
 function normalizePrinter(raw, fallbackId) {
   var p = isPlainObject(raw) ? raw : {};
+  var parsedHost = parseHostInput(p.host);
+  var scheme = trimmed(p.scheme).toLowerCase();
+  if (scheme !== "http" && scheme !== "https") scheme = "";
+  if (!scheme && parsedHost.scheme) scheme = parsedHost.scheme;
+  var port = parsedHost.port !== null ? parsedHost.port : p.port;
   return {
     id: trimmed(p.id) || trimmed(fallbackId) || "",
     name: trimmed(p.name),
-    host: trimmed(p.host),
-    port: clampInt(p.port, DEFAULT_PORT, 1, 65535),
+    host: parsedHost.host,
+    port: clampInt(port, DEFAULT_PORT, 1, 65535),
+    scheme: scheme,
     apiKey: trimmed(p.apiKey)
   };
 }
@@ -80,25 +114,34 @@ function findPrinter(printers, id) {
 
 // ---------------------------------------------------------------- URLs
 
-function baseUrl(printer) {
-  return "http://" + printer.host + ":" + printer.port;
+// scheme argument lets the caller (Service.qml) pin a scheme it already
+// pinned/knows works, or override it while probing http vs https. Falls back
+// to the printer's own stored scheme, then plain http.
+function effectiveScheme(printer, scheme) {
+  if (scheme === "http" || scheme === "https") return scheme;
+  if (printer.scheme === "http" || printer.scheme === "https") return printer.scheme;
+  return "http";
 }
 
-function queryUrl(printer) {
-  return baseUrl(printer) + "/printer/objects/query"
+function baseUrl(printer, scheme) {
+  return effectiveScheme(printer, scheme) + "://" + printer.host + ":" + printer.port;
+}
+
+function queryUrl(printer, scheme) {
+  return baseUrl(printer, scheme) + "/printer/objects/query"
     + "?webhooks&print_stats&display_status&virtual_sdcard&extruder&heater_bed";
 }
 
-function infoUrl(printer) {
-  return baseUrl(printer) + "/printer/info";
+function infoUrl(printer, scheme) {
+  return baseUrl(printer, scheme) + "/printer/info";
 }
 
-function actionUrl(printer, path) {
-  return baseUrl(printer) + path;
+function actionUrl(printer, path, scheme) {
+  return baseUrl(printer, scheme) + path;
 }
 
-function gcodeActionUrl(printer, script) {
-  return baseUrl(printer) + "/printer/gcode/script?script=" + encodeURIComponent(script);
+function gcodeActionUrl(printer, script, scheme) {
+  return baseUrl(printer, scheme) + "/printer/gcode/script?script=" + encodeURIComponent(script);
 }
 
 function apiKeyHeaderArgs(printer) {
@@ -171,11 +214,22 @@ function parseInfoResponse(raw) {
     var data = JSON.parse(String(raw || ""));
     var result = data && data.result;
     if (!isPlainObject(result)) return { ok: false };
-    return { ok: true, state: trimmed(result.state) || "unknown", message: trimmed(result.state_message) };
+    return {
+      ok: true,
+      state: trimmed(result.state) || "unknown",
+      message: trimmed(result.state_message),
+      hostname: trimmed(result.hostname)
+    };
   } catch (e) {
     return { ok: false };
   }
 }
+
+// Order to probe an unspecified scheme in: Moonraker's own listener is plain
+// HTTP in the overwhelming majority of setups (TLS, when present at all, is
+// usually a reverse proxy in front of the web UI, not Moonraker's API port
+// itself), so try that first and only fall back to https.
+var SCHEME_PROBE_ORDER = ["http", "https"];
 
 function stateLabel(state) {
   switch (state) {
@@ -240,6 +294,8 @@ function notificationForTransition(prevState, nextState, printerName, filename, 
 if (typeof module !== "undefined") {
   module.exports = {
     DEFAULT_PORT: DEFAULT_PORT,
+    SCHEME_PROBE_ORDER: SCHEME_PROBE_ORDER,
+    parseHostInput: parseHostInput,
     normalizePrinter: normalizePrinter,
     printerDisplayName: printerDisplayName,
     parsePrinters: parsePrinters,

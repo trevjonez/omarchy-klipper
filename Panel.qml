@@ -41,6 +41,7 @@ Panel {
     managingPrinters = false
     addingPrinter = true
     editingPrinterId = ""
+    printer.resetTestState()
     Qt.callLater(function() {
       nameField.text = ""
       hostField.text = ""
@@ -54,6 +55,7 @@ Panel {
     if (!p) return
     addingPrinter = true
     editingPrinterId = p.id
+    printer.resetTestState()
     Qt.callLater(function() {
       nameField.text = p.name
       hostField.text = p.host
@@ -66,15 +68,39 @@ Panel {
   function cancelEditPrinter() {
     addingPrinter = false
     editingPrinterId = ""
+    printer.resetTestState()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
+  function currentFormFields() {
+    return { name: nameField.text, host: hostField.text, port: portField.text, apiKey: apiKeyField.text }
+  }
+
+  function testCurrentForm() {
+    printer.testConnection(currentFormFields())
+  }
+
   function commitPrinterForm() {
-    var fields = { name: nameField.text, host: hostField.text, port: portField.text, apiKey: apiKeyField.text }
+    var fields = currentFormFields()
     if (String(fields.host || "").trim() === "") return
+    // A successful test already knows a working scheme for this exact
+    // host/port/key — carry it over so the printer is pinned immediately
+    // instead of probing again on its first live poll.
+    if (printer.testSuccess) fields.scheme = printer.testedScheme
     if (editingPrinterId !== "") printer.updatePrinter(editingPrinterId, fields)
     else printer.addPrinter(fields)
     cancelEditPrinter()
+  }
+
+  // A successful test that ran while the Name field was still blank fills it
+  // in from the printer's own reported hostname — saves typing, and reacts
+  // even if the user re-tests after editing the host.
+  Connections {
+    target: printer
+    function onTestSequenceChanged() {
+      if (printer.testSuccess && nameField.text.trim() === "" && printer.testedHostname !== "")
+        nameField.text = printer.testedHostname
+    }
   }
 
   Service {
@@ -423,11 +449,19 @@ Panel {
             TextField {
               id: hostField
               width: parent.width
-              placeholderText: "Host or IP (required)"
+              placeholderText: "Host, IP, or URL (required)"
               foreground: root.foreground
               font.family: root.fontFamily
               Keys.onReturnPressed: root.commitPrinterForm()
               Keys.onEscapePressed: root.cancelEditPrinter()
+            }
+            Text {
+              text: "Plain host tries http then https automatically; paste a full https://… URL to pin one."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+              width: parent.width
             }
             TextField {
               id: portField
@@ -448,8 +482,19 @@ Panel {
               Keys.onEscapePressed: root.cancelEditPrinter()
             }
 
+            Text {
+              visible: printer.testStatus !== ""
+              text: printer.testStatus
+              color: printer.testing ? root.dim : (printer.testSuccess ? Color.accent : Color.urgent)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              width: parent.width
+            }
+
             Row {
               spacing: Style.space(10)
+              KlipperButton { buttonText: printer.testing ? "Testing…" : "Test"; onClicked: root.testCurrentForm() }
               KlipperButton { buttonText: root.editingPrinterId !== "" ? "Save" : "Add"; onClicked: root.commitPrinterForm() }
               KlipperButton { buttonText: "Cancel"; onClicked: root.cancelEditPrinter() }
             }

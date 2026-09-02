@@ -36,6 +36,27 @@ Item {
   // a second press within confirmTimer's window.
   property string pendingConfirm: ""
 
+  // ---- scheme detection -------------------------------------------------
+  // Used only while the active printer has no scheme pinned (neither typed
+  // into the host field nor learned yet). Reset whenever the active printer
+  // changes; the first successful poll pins the winning scheme onto the
+  // printer record so later polls never have to probe again.
+  property string schemeGuess: "http"
+  property bool _triedFallbackScheme: false
+
+  // ---- test-connection (add/edit form) -----------------------------------
+  property bool testing: false
+  property bool testSuccess: false
+  property string testStatus: ""
+  property string testedHostname: ""
+  property string testedScheme: ""
+  // Bumped on every completed test (success or failure) so a caller can react
+  // even when testSuccess stays the same across repeated clicks.
+  property int testSequence: 0
+  property var _testFields: null
+  property var _testSchemeQueue: []
+  property string _testCurrentScheme: ""
+
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 3, 1, 60)
   readonly property bool busy: statusProcess.running || actionProcess.running
   readonly property string printerName: activePrinter ? Model.printerDisplayName(activePrinter) : ""
@@ -61,6 +82,13 @@ Item {
 
   // ---------------------------------------------------------------- polling
 
+  // The scheme actually used for the next request: the printer's own pinned
+  // scheme when it has one, else whichever one is currently being probed.
+  function activeScheme() {
+    return (activePrinter && (activePrinter.scheme === "http" || activePrinter.scheme === "https"))
+      ? activePrinter.scheme : schemeGuess
+  }
+
   function refresh() {
     if (!activePrinter) {
       resetStatus("")
@@ -69,9 +97,10 @@ Item {
     if (statusProcess.running) return
     refreshing = true
     var printer = activePrinter
+    var scheme = activeScheme()
     statusProcess.command = ["curl", "-fsS", "--max-time", "4"]
       .concat(Model.apiKeyHeaderArgs(printer))
-      .concat([Model.queryUrl(printer)])
+      .concat([Model.queryUrl(printer, scheme)])
     statusProcess.running = true
     if (!pollWatchdog.running) pollWatchdog.restart()
   }
@@ -170,15 +199,32 @@ Item {
     onExited: function(exitCode) {
       root.refreshing = false
       var stdout = String(statusStdout.text || "")
+      var printerHasPinnedScheme = root.activePrinter && (root.activePrinter.scheme === "http" || root.activePrinter.scheme === "https")
+
       if (exitCode !== 0 || stdout === "") {
+        // No scheme pinned yet and we haven't tried the other one this
+        // round — flip and retry once before giving up as unreachable.
+        if (!printerHasPinnedScheme && !root._triedFallbackScheme) {
+          root._triedFallbackScheme = true
+          root.schemeGuess = root.schemeGuess === "http" ? "https" : "http"
+          root.refresh()
+          return
+        }
+        root._triedFallbackScheme = false
         root.applyOffline("Unreachable")
         return
       }
+
+      root._triedFallbackScheme = false
       var parsed = Model.parseStatusResponse(stdout)
       if (!parsed.ok) {
         root.applyOffline(parsed.error || "Bad response from Moonraker")
         return
       }
+      // Learned a working scheme for a printer that didn't have one pinned —
+      // persist it so every later poll goes straight there instead of
+      // probing twice each time.
+      if (!printerHasPinnedScheme) root.pinPrinterScheme(root.activePrinterId, root.schemeGuess)
       root.applyParsedStatus(parsed)
     }
   }
@@ -196,8 +242,9 @@ Item {
 
   function togglePauseResume() {
     if (!activePrinter) return
-    if (state === "printing") runAction(Model.actionUrl(activePrinter, "/printer/print/pause"), "Pausing…")
-    else if (state === "paused") runAction(Model.actionUrl(activePrinter, "/printer/print/resume"), "Resuming…")
+    var scheme = activeScheme()
+    if (state === "printing") runAction(Model.actionUrl(activePrinter, "/printer/print/pause", scheme), "Pausing…")
+    else if (state === "paused") runAction(Model.actionUrl(activePrinter, "/printer/print/resume", scheme), "Resuming…")
   }
 
   function requestCancel() {
@@ -205,7 +252,7 @@ Item {
     if (pendingConfirm === "cancel") {
       pendingConfirm = ""
       confirmTimer.stop()
-      runAction(Model.actionUrl(activePrinter, "/printer/print/cancel"), "Cancelling…")
+      runAction(Model.actionUrl(activePrinter, "/printer/print/cancel", activeScheme()), "Cancelling…")
       return
     }
     pendingConfirm = "cancel"
@@ -218,7 +265,7 @@ Item {
     if (pendingConfirm === "estop") {
       pendingConfirm = ""
       confirmTimer.stop()
-      runAction(Model.actionUrl(activePrinter, "/printer/emergency_stop"), "Emergency stop sent")
+      runAction(Model.actionUrl(activePrinter, "/printer/emergency_stop", activeScheme()), "Emergency stop sent")
       return
     }
     pendingConfirm = "estop"
@@ -228,7 +275,7 @@ Item {
 
   function restartFirmware() {
     if (!activePrinter) return
-    runAction(Model.actionUrl(activePrinter, "/printer/firmware_restart"), "Restarting Klipper…")
+    runAction(Model.actionUrl(activePrinter, "/printer/firmware_restart", activeScheme()), "Restarting Klipper…")
   }
 
   function cancelPendingConfirm() {
@@ -307,12 +354,100 @@ Item {
     activePrinterId = id
     statusProcess.running = false
     resetStatus("")
+    schemeGuess = "http"
+    _triedFallbackScheme = false
     persistPrinters()
     refresh()
   }
 
+  // Records the scheme that just answered so future polls skip probing.
+  function pinPrinterScheme(id, scheme) {
+    var list = printers.slice()
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === id) {
+        list[i] = { id: list[i].id, name: list[i].name, host: list[i].host, port: list[i].port, scheme: scheme, apiKey: list[i].apiKey }
+        break
+      }
+    }
+    printers = list
+    persistPrinters()
+  }
+
   function persistPrinters() {
     printersFile.setText(Model.serializePrinters({ activePrinterId: activePrinterId, printers: printers }))
+  }
+
+  // ---------------------------------------------------------------- test connection
+
+  // Probes the host/port/apiKey currently typed into the add/edit form —
+  // before it's ever saved — against /printer/info. Tries the scheme in the
+  // host field if the user gave one, otherwise both in turn. Exposes
+  // testedHostname so the panel can offer to fill in a blank Name field.
+  function resetTestState() {
+    testing = false
+    testSuccess = false
+    testStatus = ""
+    testedHostname = ""
+    testedScheme = ""
+    testProcess.running = false
+  }
+
+  function testConnection(fields) {
+    if (testProcess.running) return
+    var normalized = Model.normalizePrinter(fields, "test")
+    if (!normalized.host) {
+      testSuccess = false
+      testStatus = "Enter a host first"
+      testSequence++
+      return
+    }
+    testing = true
+    testSuccess = false
+    testStatus = "Testing…"
+    testedHostname = ""
+    testedScheme = ""
+    _testFields = normalized
+    _testSchemeQueue = normalized.scheme ? [normalized.scheme] : Model.SCHEME_PROBE_ORDER.slice()
+    runNextTestAttempt()
+  }
+
+  function runNextTestAttempt() {
+    if (_testSchemeQueue.length === 0) {
+      testing = false
+      testSuccess = false
+      testStatus = "Could not connect"
+      testSequence++
+      return
+    }
+    _testCurrentScheme = _testSchemeQueue.shift()
+    testProcess.command = ["curl", "-fsS", "--max-time", "4"]
+      .concat(Model.apiKeyHeaderArgs(_testFields))
+      .concat([Model.infoUrl(_testFields, _testCurrentScheme)])
+    testProcess.running = true
+  }
+
+  Process {
+    id: testProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: testStdout; waitForEnd: true }
+    stderr: StdioCollector { id: testStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var stdout = String(testStdout.text || "")
+      var parsed = exitCode === 0 && stdout !== "" ? Model.parseInfoResponse(stdout) : { ok: false }
+      if (!parsed.ok) {
+        root.runNextTestAttempt()
+        return
+      }
+      root.testing = false
+      root.testSuccess = true
+      root.testedScheme = root._testCurrentScheme
+      root.testedHostname = parsed.hostname || ""
+      root.testStatus = parsed.state === "ready"
+        ? ("Connected" + (root.testedHostname ? " — " + root.testedHostname : ""))
+        : ("Connected — Klipper is " + parsed.state)
+      root.testSequence++
+    }
   }
 
   function applyPrintersState(parsed) {
