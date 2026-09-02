@@ -153,7 +153,7 @@ ShellRoot {
   // "Ready" reads as a stalled print.
   function checkIdle() {
     var v = view()
-    fakeConn.state = "ready"
+    fakeConn.state = "standby"   // what Moonraker reports when idle
     fakeConn.progress = 0
     h.waitFor("progress hidden when the printer is idle",
               function() { return !root.hasVisibleText(v.contentItem, "0%") }, function() {

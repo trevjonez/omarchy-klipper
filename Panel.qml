@@ -56,9 +56,20 @@ Panel {
   property string fullscreenPrinterId: ""
   property int fullscreenWebcamIndex: 0
 
+  // All-cameras wall, on right-click.
+  property bool cameraWallOpen: false
+
+  function openCameraWall() {
+    close()
+    settingsOpen = false
+    fullscreenPrinterId = ""
+    cameraWallOpen = true
+  }
+
   function openFullscreenCamera(printerId, index) {
     fullscreenPrinterId = printerId
     fullscreenWebcamIndex = index
+    cameraWallOpen = false
     // The popup is an overlay surface holding the keyboard; leaving it up
     // behind a fullscreen feed just fights over focus.
     close()
@@ -242,6 +253,9 @@ Panel {
       if (b === Qt.MiddleButton) {
         root.close()
         root.settingsOpen = !root.settingsOpen
+      } else if (b === Qt.RightButton) {
+        if (root.cameraWallOpen) root.cameraWallOpen = false
+        else root.openCameraWall()
       } else {
         root.settingsOpen = false
         root.toggle()
@@ -960,6 +974,16 @@ Panel {
     }
   }
 
+  CameraWall {
+    id: cameraWall
+    service: printer
+    open: root.cameraWallOpen
+    onCloseRequested: root.cameraWallOpen = false
+    onTileActivated: function(printerId, webcamIndex) {
+      root.openFullscreenCamera(printerId, webcamIndex)
+    }
+  }
+
   FullscreenVideo {
     id: fullscreenVideo
     service: printer
@@ -1000,6 +1024,9 @@ Panel {
       if (printer.activePrinterId !== "") root.openFullscreenCamera(printer.activePrinterId, 0)
     }
     function closeFullscreen(): void { root.fullscreenPrinterId = "" }
+
+    function cameras(): void { root.openCameraWall() }
+    function closeCameras(): void { root.cameraWallOpen = false }
     function closeSettings(): void { root.settingsOpen = false }
     function toggleSettings(): void {
       if (root.settingsOpen) { root.settingsOpen = false; return }

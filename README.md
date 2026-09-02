@@ -39,6 +39,10 @@ either of those web UIs, this plugin can talk to it too.
   metadata — the file shows up with no thumbnail, no estimated time, no
   filament usage. Point the watcher at that share and each new `.gcode`
   landing there is scanned on every reachable printer automatically.
+- Right-click the bar icon for a tiled wall of every camera on every
+  configured printer, each labelled with its printer name and live status
+  on a translucent backing so the text stays readable over the picture.
+  Clicking a tile opens that feed fullscreen.
 - Click a camera feed to open it fullscreen, with the printer's name,
   status, file and progress drawn over it. Which fields appear is chosen
   per printer in its edit form. Escape or a click dismisses it; it is also
@@ -95,7 +99,12 @@ Both are also on IPC, so you can bind them to a key:
 ```bash
 qs -p /usr/share/omarchy/shell ipc call klipper toggle
 qs -p /usr/share/omarchy/shell ipc call klipper toggleSettings
+qs -p /usr/share/omarchy/shell ipc call klipper cameras      # all-camera wall
+qs -p /usr/share/omarchy/shell ipc call klipper fullscreen   # active printer
 ```
+
+Left-click the bar icon for the printer popup, middle-click for app settings,
+right-click for the camera wall.
 
 ### G-code watcher
 

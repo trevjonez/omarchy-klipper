@@ -138,6 +138,25 @@ ui_panel_layers() {
     hyprctl layers 2>/dev/null | grep -c "namespace: omarchy-keyboard-panel"
 }
 
+# The all-cameras wall and the fullscreen feed are their own layer surfaces,
+# distinct from the popups, so each can be counted independently.
+ui_wall_layers() {
+  WAYLAND_DISPLAY="$UI_DISPLAY" HYPRLAND_INSTANCE_SIGNATURE="$UI_HIS" \
+    hyprctl layers 2>/dev/null | grep -c "namespace: omarchy-klipper-wall"
+}
+
+ui_fullscreen_layers() {
+  WAYLAND_DISPLAY="$UI_DISPLAY" HYPRLAND_INSTANCE_SIGNATURE="$UI_HIS" \
+    hyprctl layers 2>/dev/null | grep -c "namespace: omarchy-klipper-fullscreen"
+}
+
+ui_assert_count() {
+  local want="$1" got="$2" label="$3"
+  if [[ "$got" == "$want" ]]; then ui_log "ok: $label"; return 0; fi
+  ui_log "FAIL: $label -- expected $want, found $got"
+  return 1
+}
+
 ui_assert_layers() {
   local want="$1" label="$2" got
   got="$(ui_panel_layers)"

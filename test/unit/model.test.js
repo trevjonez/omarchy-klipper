@@ -124,6 +124,46 @@ test('video overlay selection', () => {
   assert.deepEqual(saved.printers[0].videoOverlays, ['status']);
 });
 
+test('cameraTiles flattens every printer camera into one list', () => {
+  const printers = [
+    { id: 'a', name: 'Voron', webcams: [{ name: 'C270' }] },
+    { id: 'b', name: 'MK3-1', webcams: [] },
+    { id: 'c', name: 'MK3-2', webcams: [{ name: 'Front' }, { name: 'Side' }] },
+  ];
+  const tiles = M.cameraTiles(printers);
+  assert.equal(tiles.length, 3, 'a camera-less printer contributes no tile');
+  assert.deepEqual(tiles.map(t => t.printerName), ['Voron', 'MK3-2', 'MK3-2']);
+  assert.deepEqual(tiles.map(t => t.webcamIndex), [0, 0, 1]);
+  assert.deepEqual(tiles.map(t => t.printerId), ['a', 'c', 'c']);
+
+  // A single camera is already identified by its printer's name; only label
+  // the camera when a printer has more than one.
+  assert.equal(tiles[0].cameraName, '');
+  assert.deepEqual([tiles[1].cameraName, tiles[2].cameraName], ['Front', 'Side']);
+
+  assert.deepEqual(M.cameraTiles([]), []);
+  assert.deepEqual(M.cameraTiles(null), []);
+  assert.deepEqual(M.cameraTiles([{ name: 'no id', webcams: [{}] }]), [], 'skips records with no id');
+  assert.deepEqual(M.cameraTiles([{ id: 'x', webcams: 'nope' }]), []);
+});
+
+test('camera grid stays as square as possible', () => {
+  // Squarest grid keeps cells large, which matters more for video than
+  // filling the final row.
+  const expected = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 2, 5: 3, 6: 3, 9: 3, 10: 4 };
+  for (const [count, cols] of Object.entries(expected)) {
+    assert.equal(M.gridColumnsFor(Number(count)), cols, `count ${count}`);
+  }
+  assert.equal(M.gridRowsFor(4, 2), 2);
+  assert.equal(M.gridRowsFor(5, 3), 2);
+  assert.equal(M.gridRowsFor(0, 1), 0);
+  // Every tile must have a cell, or some cameras would simply not be drawn.
+  for (let n = 1; n <= 20; n++) {
+    const c = M.gridColumnsFor(n);
+    assert.ok(c * M.gridRowsFor(n, c) >= n, `grid too small for ${n}`);
+  }
+});
+
 // ------------------------------------------------------------ gcode paths
 
 test('relativeGcodePath maps only files Moonraker could scan', () => {

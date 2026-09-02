@@ -22,7 +22,9 @@ read -r W H < <(WAYLAND_DISPLAY="$UI_DISPLAY" HYPRLAND_INSTANCE_SIGNATURE="$UI_H
 PILL_X=$(( W - 20 ))
 PILL_Y=$(( H - 13 ))
 
-click() {  # click <button>   1=left 2=right 3=middle
+# ydotool encodes a click as button-index | 0x40 (press) | 0x80 (release),
+# so a full press-and-release is 0xC0 for left, 0xC1 right, 0xC2 middle.
+click() {  # click <code>
   WAYLAND_DISPLAY="$UI_DISPLAY" ydotool mousemove --absolute -x "$PILL_X" -y "$PILL_Y" 2>/dev/null
   sleep 0.3
   WAYLAND_DISPLAY="$UI_DISPLAY" ydotool click "$1" 2>/dev/null
@@ -32,27 +34,35 @@ click() {  # click <button>   1=left 2=right 3=middle
 ui_ipc close; ui_ipc closeSettings; sleep 0.8
 ui_assert_layers 0 "starts with nothing open" || rc=1
 
-click 0xC0   # middle
+click 0xC2   # middle
 ui_assert_layers 1 "middle-click opens a popup" || rc=1
 # closeSettings only dismisses the settings popup, so this identifies which
 # popup middle-click actually opened.
 ui_ipc closeSettings; sleep 1
 ui_assert_layers 0 "middle-click opened the settings popup" || rc=1
 
-click 0xC0
+click 0xC2
 sleep 0.3
-click 0xC0
+click 0xC2
 ui_assert_layers 0 "middle-click again closes it" || rc=1
 
-click 0xC0
+click 0xC2
 ui_assert_layers 1 "settings popup open before left-click" || rc=1
-click 0xC0   # reset via toggle
+click 0xC2   # reset via toggle
 sleep 0.3
 
-click 0x40   # left
+click 0xC0   # left
 ui_assert_layers 1 "left-click opens a popup" || rc=1
 ui_ipc closeSettings; sleep 1
 ui_assert_layers 1 "left-click opened the printer popup, not settings" || rc=1
+
+# Right-click opens the all-cameras wall, which is its own layer surface.
+click 0xC1   # right
+ui_assert_count 1 "$(ui_wall_layers)" "right-click opens the camera wall" || rc=1
+ui_assert_count 0 "$(ui_panel_layers)" "camera wall is not a popup surface" || rc=1
+
+click 0xC1
+ui_assert_count 0 "$(ui_wall_layers)" "right-click again closes the wall" || rc=1
 
 [[ $rc -ne 0 ]] && ui_shot middleclick-failure
 exit $rc

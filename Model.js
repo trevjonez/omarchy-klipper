@@ -147,6 +147,50 @@ function normalizeVideoOverlays(raw) {
   return out;
 }
 
+// ------------------------------------------------------- camera wall
+
+// Flattens every configured printer's cameras into one list of tiles, so the
+// all-cameras view can iterate a single model. A printer contributes one tile
+// per camera, and printers with none contribute nothing rather than an empty
+// placeholder.
+function cameraTiles(printers) {
+  var tiles = [];
+  var list = printers || [];
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i];
+    if (!p || !p.id) continue;
+    var cams = Array.isArray(p.webcams) ? p.webcams : [];
+    for (var j = 0; j < cams.length; j++) {
+      if (!cams[j]) continue;
+      tiles.push({
+        printerId: p.id,
+        printerName: printerDisplayName(p),
+        webcamIndex: j,
+        // Only worth labelling the camera when a printer has more than one;
+        // otherwise the printer name already identifies the feed.
+        cameraName: cams.length > 1 ? trimmed(cams[j].name) : "",
+        webcam: cams[j]
+      });
+    }
+  }
+  return tiles;
+}
+
+// Squarest grid that holds `count` tiles. Keeps cells as large as possible,
+// which matters more than filling the last row when the tiles are video.
+function gridColumnsFor(count) {
+  var n = parseInt(String(count), 10);
+  if (!isFinite(n) || n <= 1) return 1;
+  return Math.ceil(Math.sqrt(n));
+}
+
+function gridRowsFor(count, columns) {
+  var n = parseInt(String(count), 10);
+  var c = parseInt(String(columns), 10);
+  if (!isFinite(n) || n <= 0 || !isFinite(c) || c <= 0) return 0;
+  return Math.ceil(n / c);
+}
+
 // Validates one persisted {object, field?} selection entry.
 function normalizeDisplaySensorEntry(entry) {
   if (!isPlainObject(entry)) return null;
@@ -789,6 +833,9 @@ if (typeof module !== "undefined") {
     parseWebcamsResponse: parseWebcamsResponse,
     parseAspectRatio: parseAspectRatio,
     normalizeDisplaySensorEntry: normalizeDisplaySensorEntry,
+    cameraTiles: cameraTiles,
+    gridColumnsFor: gridColumnsFor,
+    gridRowsFor: gridRowsFor,
     VIDEO_OVERLAY_FIELDS: VIDEO_OVERLAY_FIELDS,
     DEFAULT_VIDEO_OVERLAYS: DEFAULT_VIDEO_OVERLAYS,
     isVideoOverlayKey: isVideoOverlayKey,
