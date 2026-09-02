@@ -76,6 +76,16 @@ ui_start() {
   ui_build_stage
   trap ui_stop EXIT
 
+  # The runner already put us in a nested, empty compositor so the tests'
+  # exclusive-keyboard surfaces cannot reach the real session. Reuse it rather
+  # than nesting a third compositor inside it.
+  if [[ "${TEST_OWNED_DISPLAY:-0}" == "1" && -n "${TEST_OWNED_HIS:-}" ]]; then
+    UI_DISPLAY="$WAYLAND_DISPLAY"
+    UI_HIS="$TEST_OWNED_HIS"
+    ui_start_shell
+    return $?
+  fi
+
   local runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   local before; before="$(ls "$runtime" | grep -E '^wayland-[0-9]+$' | sort)"
   local his_before; his_before="$(ls "$runtime/hypr" 2>/dev/null | sort)"
@@ -103,6 +113,11 @@ ui_start() {
     sleep 0.1
   done
 
+  ui_start_shell
+}
+
+ui_start_shell() {
+  local i
   # Deliberately not `qs -n`: the real shell is already running this same
   # config path, and -n would make this instance exit as a duplicate.
   HOME="$UI_STAGE" WAYLAND_DISPLAY="$UI_DISPLAY" \

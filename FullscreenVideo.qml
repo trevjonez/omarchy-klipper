@@ -47,10 +47,24 @@ PanelWindow {
 
   WlrLayershell.namespace: "omarchy-klipper-fullscreen"
   WlrLayershell.layer: WlrLayer.Overlay
-  // Exclusive rather than OnDemand: this covers the whole output, so there is
-  // nothing else on screen that could need the pointer, and Escape has to work
-  // without the user clicking first.
-  WlrLayershell.keyboardFocus: open ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+  // Prime with Exclusive so the surface takes focus the moment it maps (so
+  // Escape works without clicking first), then settle on OnDemand. Holding
+  // Exclusive makes Hyprland route *every* pointer event here regardless of
+  // which output the cursor is over -- the same reason the shell's own
+  // KeyboardPanel does not hold it. It also means anything that maps this
+  // surface, including a test run, swallows the keyboard until it closes.
+  property bool _focusPrimed: false
+
+  WlrLayershell.keyboardFocus: open
+    ? (_focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
+    : WlrKeyboardFocus.None
+
+  Timer {
+    id: focusPrimeTimer
+    interval: 120
+    repeat: false
+    onTriggered: root._focusPrimed = true
+  }
 
   anchors { top: true; bottom: true; left: true; right: true }
 
@@ -243,5 +257,13 @@ PanelWindow {
     }
   }
 
-  onOpenChanged: if (open) Qt.callLater(function() { keys.forceActiveFocus() })
+  onOpenChanged: {
+    if (open) {
+      _focusPrimed = false
+      focusPrimeTimer.restart()
+      Qt.callLater(function() { keys.forceActiveFocus() })
+    } else {
+      _focusPrimed = false
+    }
+  }
 }

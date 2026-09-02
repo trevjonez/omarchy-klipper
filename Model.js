@@ -674,6 +674,28 @@ function mergeStatusObjects(current, delta) {
 // Returns null for anything else (other notify_* methods, the subscribe
 // response, malformed JSON) so the caller can just skip what it doesn't
 // recognize.
+// Moonraker announces Klippy's lifecycle separately from status. This matters
+// because it discards every client subscription when Klippy disconnects
+// (klippy_connection.py: `self.subscriptions = {}`), while the websocket to
+// Moonraker itself stays open. Without re-subscribing on ready, the panel
+// freezes on the last state seen before the shutdown -- an emergency stop
+// followed by a firmware restart would leave it reading "Klipper shut down"
+// forever.
+function parseKlippyLifecycle(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    if (!isPlainObject(data)) return null;
+    switch (data.method) {
+      case "notify_klippy_ready": return "ready";
+      case "notify_klippy_shutdown": return "shutdown";
+      case "notify_klippy_disconnected": return "disconnected";
+      default: return null;
+    }
+  } catch (e) {
+    return null;
+  }
+}
+
 function parseNotifyStatusUpdate(raw) {
   try {
     var data = JSON.parse(String(raw || ""));
@@ -766,6 +788,7 @@ function stateLabel(state) {
     case "klippy_error": return "Klipper error";
     case "klippy_shutdown": return "Klipper shut down";
     case "klippy_startup": return "Klipper starting";
+    case "klippy_disconnected": return "Klipper disconnected";
     case "offline": return "Unreachable";
     default: return state ? state : "Unknown";
   }
@@ -891,6 +914,7 @@ if (typeof module !== "undefined") {
     extractStatus: extractStatus,
     mergeStatusObjects: mergeStatusObjects,
     parseNotifyStatusUpdate: parseNotifyStatusUpdate,
+    parseKlippyLifecycle: parseKlippyLifecycle,
     subscribeRequestJson: subscribeRequestJson,
     parseSubscribeResponse: parseSubscribeResponse,
     websocketUrl: websocketUrl,

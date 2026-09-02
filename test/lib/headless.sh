@@ -2,13 +2,14 @@
 #
 # `qs` aborts with "cannot open display" without one. Three cases:
 #
-#   1. A session is already running -- use it. The tests spawn their own qs
-#      instances against a mock server and never touch the real bar, so this
-#      is both safe and much faster than starting another compositor.
-#   2. TEST_NESTED=1 -- start a nested compositor inside that session and run
-#      there instead. Used by the ui tier, so synthetic clicks land in an
-#      isolated compositor rather than on the developer's real windows.
-#   3. No session at all (SSH, CI) -- start a headless compositor.
+#   1. A session is already running -- start a NESTED compositor inside it and
+#      run there. This is not optional: the tests instantiate the real
+#      FullscreenVideo and CameraWall, which map layer-shell surfaces with
+#      WlrKeyboardFocus.Exclusive. Run against the live session those grab the
+#      compositor's keyboard and swallow whatever the developer is typing.
+#      Set TEST_NESTED=0 to run against the current session anyway; it is
+#      faster, and fine for the unit tier, but it will eat keystrokes.
+#   2. No session at all (SSH, CI) -- start a headless compositor.
 #
 # Case 3 needs cage or sway. Hyprland cannot do it: since 0.4x it uses
 # Aquamarine rather than wlroots, WLR_BACKENDS is ignored, and with no seat to
@@ -16,12 +17,20 @@
 # Hyprland works fine *nested*, which is why case 2 still uses it.
 
 HEADLESS_PID=""
+# Set when this script started the compositor, so the ui tier can reuse it
+# instead of nesting a third one inside it.
+export TEST_OWNED_DISPLAY=0
+export TEST_OWNED_HIS=""
 
 _headless_teardown() {
   if [[ -n "$HEADLESS_PID" ]]; then
     kill "$HEADLESS_PID" 2>/dev/null
     wait "$HEADLESS_PID" 2>/dev/null
     HEADLESS_PID=""
+# Set when this script started the compositor, so the ui tier can reuse it
+# instead of nesting a third one inside it.
+export TEST_OWNED_DISPLAY=0
+export TEST_OWNED_HIS=""
   fi
 }
 
@@ -73,6 +82,14 @@ _start_compositor() {
   esac
   HEADLESS_PID=$!
   _await_new_socket "$before" "$logdir/comp.log" || return 1
+  TEST_OWNED_DISPLAY=1
+  local i his_now
+  for i in $(seq 1 50); do
+    his_now="$(ls "$runtime/hypr" 2>/dev/null | sort)"
+    TEST_OWNED_HIS="$(comm -13 <(echo "$his_before") <(echo "$his_now") | head -1)"
+    [[ -n "$TEST_OWNED_HIS" ]] && break
+    sleep 0.1
+  done
   echo "started $kind on $WAYLAND_DISPLAY (pid $HEADLESS_PID)"
 }
 
@@ -82,14 +99,19 @@ ensure_display() {
   [[ -n "${WAYLAND_DISPLAY:-}" && -S "$runtime/${WAYLAND_DISPLAY}" ]] && have_session=1
 
   if [[ $have_session -eq 1 && "${TEST_NESTED:-0}" != "1" ]]; then
+    echo "WARNING: TEST_NESTED=0 -- tests will map exclusive-keyboard surfaces" >&2
+    echo "         on your live session and can swallow keystrokes." >&2
     return 0
   fi
 
   if [[ $have_session -eq 1 ]]; then
-    # Nesting for isolation; Hyprland is fine as a nested client.
+    # Nested, so the tests' layer-shell surfaces cannot take the real
+    # compositor's keyboard. Hyprland works fine as a nested client.
     command -v Hyprland >/dev/null && _start_compositor nested-hyprland && return 0
-    echo "TEST_NESTED=1 but no nestable compositor found; using the current session" >&2
-    return 0
+    echo "no nestable compositor found; refusing to run layer-shell tests on the" >&2
+    echo "live session, where they would steal keyboard focus. Install Hyprland" >&2
+    echo "or run ./test/run.sh --unit only." >&2
+    return 1
   fi
 
   for kind in cage sway; do

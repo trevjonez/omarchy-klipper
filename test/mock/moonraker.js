@@ -111,7 +111,12 @@ function statusSnapshot() {
   return status;
 }
 
+// Sockets that have an active subscription. Moonraker discards every client
+// subscription when Klippy disconnects (klippy_connection.py) while leaving
+// the websocket open, so the mock has to model that or a test cannot tell a
+// working re-subscribe from a broken one.
 const sockets = new Set();
+const subscribed = new Set();
 
 function broadcast(obj) {
   const frame = encodeFrame(JSON.stringify(obj));
@@ -119,7 +124,29 @@ function broadcast(obj) {
 }
 
 function pushStatus(patch) {
-  broadcast({ jsonrpc: '2.0', method: 'notify_status_update', params: [patch, Date.now() / 1000] });
+  const frame = encodeFrame(JSON.stringify({
+    jsonrpc: '2.0', method: 'notify_status_update', params: [patch, Date.now() / 1000],
+  }));
+  // Only to sockets that actually hold a subscription.
+  for (const s of subscribed) { try { s.write(frame); } catch (e) { /* peer gone */ } }
+}
+
+function setKlippyState(next) {
+  const was = cfg.klippyState;
+  cfg.klippyState = next;
+  if (was === next) return;
+  if (next === 'ready') {
+    broadcast({ jsonrpc: '2.0', method: 'notify_klippy_ready', params: [] });
+  } else {
+    // Exactly Moonraker's behaviour: subscriptions are dropped, the socket
+    // stays open, and only a lifecycle notification is sent.
+    subscribed.clear();
+    broadcast({
+      jsonrpc: '2.0',
+      method: next === 'shutdown' ? 'notify_klippy_shutdown' : 'notify_klippy_disconnected',
+      params: [],
+    });
+  }
 }
 
 // --- HTTP -----------------------------------------------------------------
@@ -159,7 +186,7 @@ const server = http.createServer((req, res) => {
     case '/__mock/state': {
       const next = url.searchParams.get('state');
       if (next) cfg.state = next;
-      if (url.searchParams.has('klippy')) cfg.klippyState = url.searchParams.get('klippy');
+      if (url.searchParams.has('klippy')) setKlippyState(url.searchParams.get('klippy'));
       if (url.searchParams.has('filename')) cfg.filename = url.searchParams.get('filename');
       if (url.searchParams.has('progress')) cfg.progress = Number(url.searchParams.get('progress'));
       pushStatus({
@@ -201,6 +228,7 @@ server.on('upgrade', (req, socket) => {
       log({ kind: 'rpc', method: rpc.method, params: rpc.params });
       if (rpc.method !== 'printer.objects.subscribe') continue;
 
+      subscribed.add(socket);
       socket.write(encodeFrame(JSON.stringify({
         jsonrpc: '2.0', id: rpc.id,
         result: { eventtime: Date.now() / 1000, status: statusSnapshot() },
@@ -211,8 +239,8 @@ server.on('upgrade', (req, socket) => {
       }
     }
   });
-  socket.on('close', () => sockets.delete(socket));
-  socket.on('error', () => sockets.delete(socket));
+  socket.on('close', () => { sockets.delete(socket); subscribed.delete(socket); });
+  socket.on('error', () => { sockets.delete(socket); subscribed.delete(socket); });
 });
 
 server.listen(Number(process.env.MOCK_PORT || 0), '127.0.0.1', () => {

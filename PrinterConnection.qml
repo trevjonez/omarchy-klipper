@@ -145,12 +145,52 @@ Item {
           root.triggerAutoDiscover()
         return
       }
+      // Klippy's lifecycle, which Moonraker reports separately from status.
+      // It discards every subscription when Klippy disconnects but keeps this
+      // websocket open, so nothing further arrives until we ask again.
+      var lifecycle = Model.parseKlippyLifecycle(message)
+      if (lifecycle !== null) {
+        root.onKlippyLifecycle(lifecycle)
+        return
+      }
+
       var delta = Model.parseNotifyStatusUpdate(message)
       if (delta) {
         root._rawStatus = Model.mergeStatusObjects(root._rawStatus, delta)
         root.applyStatus(Model.extractStatus(root._rawStatus, root.sensorObjectNames))
       }
     }
+  }
+
+  function onKlippyLifecycle(event) {
+    if (event === "ready") {
+      // Subscriptions did not survive the restart; ask again or the panel
+      // stays frozen on whatever it last saw.
+      resubscribe()
+      return
+    }
+    // Klippy is down. Reflect it immediately rather than waiting for a status
+    // update that cannot arrive, and keep asking until it comes back.
+    state = event === "shutdown" ? "klippy_shutdown" : "klippy_disconnected"
+    message = event === "shutdown" ? "Klipper shut down" : "Klipper disconnected"
+    progress = 0
+    filename = ""
+    resubscribeTimer.restart()
+  }
+
+  function resubscribe() {
+    if (sock.status === WebSocket.Open) sock.sendTextMessage(Model.subscribeRequestJson(sensorObjectNames))
+  }
+
+  // Safety net for a missed notify_klippy_ready — if this connection was
+  // opened while Klippy was already down, or the event was lost, the panel
+  // would otherwise never recover on its own.
+  Timer {
+    id: resubscribeTimer
+    interval: 10000
+    repeat: true
+    running: root.reachable && root.state.indexOf("klippy_") === 0
+    onTriggered: root.resubscribe()
   }
 
   Timer {
