@@ -141,7 +141,6 @@ Panel {
     bar: root.bar
     owner: root
     open: root.opened
-    centerOnBar: true
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(340))
     contentHeight: panel.fittedContentHeight(content.implicitHeight)
@@ -180,8 +179,10 @@ Panel {
           rightPadding: Style.space(16)
 
           // ---- printer switcher ----
+          // Shown for a single configured printer too — otherwise there is
+          // no row to hang Edit/Remove off of once "Manage printers" is on.
           Column {
-            visible: printer.printers.length > 1
+            visible: printer.printers.length > 0
             width: parent.width - parent.leftPadding - parent.rightPadding
             spacing: Style.space(4)
 
