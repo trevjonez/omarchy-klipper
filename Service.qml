@@ -118,6 +118,7 @@ Item {
   readonly property int remainingSec: Model.estimateRemainingSec(progress, printDurationSec) || 0
   readonly property bool hasRemainingEstimate: Model.estimateRemainingSec(progress, printDurationSec) !== null
 
+  readonly property bool jobInProgress: Model.jobInProgress(root.state)
   function stateLabel() { return Model.stateLabel(root.state) }
   function stateTone() { return Model.stateTone(root.state) }
   function formatDuration(sec) { return Model.formatDuration(sec) }

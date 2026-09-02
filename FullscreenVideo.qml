@@ -29,6 +29,11 @@ PanelWindow {
 
   function shows(key) { return overlays.indexOf(key) !== -1 }
 
+  // Progress, elapsed and ETA only mean something while a job is running, so
+  // selecting them does not force a "0%" bar onto an idle printer.
+  readonly property bool jobInProgress:
+    connection ? Model.jobInProgress(connection.state) : false
+
   // Signals rather than assigning to `open`: the owner binds `open` to its own
   // state, and writing to it here would break that binding, so the view could
   // be dismissed once and then never reopen.
@@ -132,7 +137,7 @@ PanelWindow {
     // Progress gets a bar as well as a number: at a glance across the room
     // the bar is the readable part.
     Item {
-      visible: root.shows("progress")
+      visible: root.shows("progress") && root.jobInProgress
       width: Style.space(220)
       height: progressLabel.implicitHeight + Style.space(8)
 
@@ -162,7 +167,7 @@ PanelWindow {
     }
 
     Text {
-      visible: root.shows("elapsed")
+      visible: root.shows("elapsed") && root.jobInProgress
       text: "Elapsed " + Model.formatDuration(root.connection ? root.connection.printDurationSec : 0)
       color: Qt.darker(Color.foreground, 1.3)
       font.family: Style.font.family
@@ -170,7 +175,7 @@ PanelWindow {
     }
 
     Text {
-      visible: root.shows("remaining")
+      visible: root.shows("remaining") && root.jobInProgress
       text: {
         var c = root.connection
         var left = c ? Model.estimateRemainingSec(c.progress, c.printDurationSec) : null

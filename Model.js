@@ -699,6 +699,13 @@ function parseInfoResponse(raw) {
 // itself), so try that first and only fall back to https.
 var SCHEME_PROBE_ORDER = ["http", "https"];
 
+// Whether there is a job to report progress on. Progress, elapsed and ETA are
+// all meaningless otherwise: an idle printer reports 0%, and a bar sitting at
+// zero next to "Ready" reads as a stalled print rather than as no print.
+function jobInProgress(state) {
+  return state === "printing" || state === "paused";
+}
+
 function stateLabel(state) {
   switch (state) {
     case "standby": return "Ready";
@@ -814,6 +821,7 @@ if (typeof module !== "undefined") {
     parseSubscribeResponse: parseSubscribeResponse,
     websocketUrl: websocketUrl,
     parseInfoResponse: parseInfoResponse,
+    jobInProgress: jobInProgress,
     stateLabel: stateLabel,
     stateTone: stateTone,
     formatDuration: formatDuration,

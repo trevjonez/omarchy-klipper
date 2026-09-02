@@ -145,7 +145,27 @@ ShellRoot {
     h.waitFor("selecting elapsed time reveals it",
               function() { return root.hasVisibleText(v.contentItem, "Elapsed") }, function() {
       h.check("previously selected overlays still shown", root.hasVisibleText(v.contentItem, "Voron"))
-      root.checkClose()
+      root.checkIdle()
+    })
+  }
+
+  // An idle printer has no progress to report: showing a 0% bar next to
+  // "Ready" reads as a stalled print.
+  function checkIdle() {
+    var v = view()
+    fakeConn.state = "ready"
+    fakeConn.progress = 0
+    h.waitFor("progress hidden when the printer is idle",
+              function() { return !root.hasVisibleText(v.contentItem, "0%") }, function() {
+      h.check("elapsed hidden when idle", !root.hasVisibleText(v.contentItem, "Elapsed"))
+      h.check("printer name still shown when idle", root.hasVisibleText(v.contentItem, "Voron"))
+
+      // Paused is still a job, so it keeps its progress.
+      fakeConn.state = "paused"
+      fakeConn.progress = 42
+      h.waitFor("progress returns while paused",
+                function() { return root.hasVisibleText(v.contentItem, "42%") },
+                function() { root.checkClose() })
     })
   }
 

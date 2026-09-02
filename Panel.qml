@@ -512,7 +512,7 @@ Panel {
             }
 
             Item {
-              visible: printer.state === "printing" || printer.state === "paused"
+              visible: printer.jobInProgress
               width: parent.width
               height: Style.space(6)
 
@@ -532,7 +532,7 @@ Panel {
             }
 
             Row {
-              visible: printer.state === "printing" || printer.state === "paused"
+              visible: printer.jobInProgress
               spacing: Style.space(16)
 
               Text {

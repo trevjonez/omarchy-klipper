@@ -330,6 +330,16 @@ test('state labels and tones', () => {
   assert.equal(typeof M.stateLabel('printing'), 'string');
 });
 
+test('jobInProgress gates progress-related display', () => {
+  // A bar sitting at 0% next to "Ready" reads as a stalled print rather than
+  // as no print, so progress/elapsed/ETA only show while a job exists.
+  assert.ok(M.jobInProgress('printing'));
+  assert.ok(M.jobInProgress('paused'), 'a paused job is still a job');
+  for (const idle of ['ready', 'complete', 'cancelled', 'error', 'standby', 'offline', '']) {
+    assert.ok(!M.jobInProgress(idle), idle);
+  }
+});
+
 test('durations and remaining-time estimate', () => {
   assert.equal(M.formatDuration(0), '0s');
   assert.equal(M.formatDuration(90), '1m');
