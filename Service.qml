@@ -189,11 +189,27 @@ Item {
     stderr: StdioCollector { id: webcamsStderr; waitForEnd: true }
     onExited: function(exitCode) {
       var stdout = String(webcamsStdout.text || "")
-      // A failed request or an older Moonraker without this endpoint both
-      // just mean "no cameras" — never surfaced as an error.
-      root.webcams = (exitCode === 0 && stdout !== "")
-        ? Model.parseWebcamsResponse(stdout, root.activePrinter, root.activeScheme())
-        : []
+      if (exitCode !== 0 || stdout === "") return // leave the cached list showing rather than collapsing it
+      var parsed = Model.parseWebcamsResponse(stdout, root.activePrinter, root.activeScheme())
+      root.webcams = parsed
+      // Persisted per-printer so the panel can size the camera area
+      // correctly the instant this printer is selected again, before this
+      // (slow, 60s) fetch has had a chance to run.
+      if (root.activePrinter) root.pinWebcams(root.activePrinterId, parsed)
+    }
+  }
+
+  // Only rewrites printers.json when the cached list actually changed, so a
+  // healthy printer's 60s refresh doesn't write to disk every tick.
+  function pinWebcams(id, webcams) {
+    var list = printers.slice()
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id !== id) continue
+      if (JSON.stringify(list[i].webcams || []) === JSON.stringify(webcams)) return
+      list[i] = { id: list[i].id, name: list[i].name, host: list[i].host, port: list[i].port, scheme: list[i].scheme, apiKey: list[i].apiKey, webcams: webcams }
+      printers = list
+      persistPrinters()
+      return
     }
   }
 
@@ -362,18 +378,26 @@ Item {
 
   function updatePrinter(id, fields) {
     var list = printers.slice()
-    var changed = false
+    var updated = null
     for (var i = 0; i < list.length; i++) {
       if (list[i].id === id) {
-        list[i] = Model.normalizePrinter(fields, id)
-        changed = true
+        updated = Model.normalizePrinter(fields, id)
+        // The edit form only ever carries name/host/port/apiKey — a cached
+        // camera list has to be carried over explicitly or every edit would
+        // silently blank it out (and re-trigger the layout jump this cache
+        // exists to avoid) until the next 60s fetch.
+        updated.webcams = list[i].webcams || []
+        list[i] = updated
         break
       }
     }
-    if (!changed) return
+    if (!updated) return
     printers = list
     persistPrinters()
-    if (id === activePrinterId) refresh()
+    if (id === activePrinterId) {
+      webcams = updated.webcams
+      refresh()
+    }
   }
 
   function removePrinter(id) {
@@ -382,23 +406,36 @@ Item {
     if (activePrinterId === id) {
       activePrinterId = list.length > 0 ? list[0].id : ""
       resetStatus("")
-      webcams = []
+      webcams = activePrinterId ? (Model.findPrinter(list, activePrinterId).webcams || []) : []
       statusProcess.running = false
+      webcamsProcess.running = false
     }
     persistPrinters()
-    if (activePrinterId) refresh()
+    if (activePrinterId) {
+      refresh()
+      fetchWebcams()
+    }
   }
 
   function setActivePrinter(id) {
     if (id === activePrinterId || !Model.findPrinter(printers, id)) return
     activePrinterId = id
     statusProcess.running = false
+    webcamsProcess.running = false
     resetStatus("")
-    webcams = []
+    // Seed from this printer's own cached camera list (persisted by
+    // pinWebcams) rather than clearing to [] — reserves the right amount of
+    // popup space immediately instead of the layout jumping once the fresh
+    // (slow, 60s) fetch below completes.
+    webcams = Model.findPrinter(printers, id).webcams || []
     schemeGuess = "http"
     _triedFallbackScheme = false
     persistPrinters()
     refresh()
+    // webcamsTimer's `running` binding stays true across a printer switch
+    // (activePrinter never goes null), so triggeredOnStart never re-fires —
+    // fetch explicitly instead of waiting up to 60s for the next slow tick.
+    fetchWebcams()
   }
 
   // Records the scheme that just answered so future polls skip probing.
@@ -406,7 +443,7 @@ Item {
     var list = printers.slice()
     for (var i = 0; i < list.length; i++) {
       if (list[i].id === id) {
-        list[i] = { id: list[i].id, name: list[i].name, host: list[i].host, port: list[i].port, scheme: scheme, apiKey: list[i].apiKey }
+        list[i] = { id: list[i].id, name: list[i].name, host: list[i].host, port: list[i].port, scheme: scheme, apiKey: list[i].apiKey, webcams: list[i].webcams || [] }
         break
       }
     }
@@ -494,6 +531,8 @@ Item {
   function applyPrintersState(parsed) {
     printers = parsed.printers
     activePrinterId = parsed.activePrinterId
+    var current = Model.findPrinter(printers, activePrinterId)
+    webcams = current ? (current.webcams || []) : []
     refresh()
   }
 

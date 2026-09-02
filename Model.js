@@ -65,7 +65,11 @@ function normalizePrinter(raw, fallbackId) {
     host: parsedHost.host,
     port: clampInt(port, DEFAULT_PORT, 1, 65535),
     scheme: scheme,
-    apiKey: trimmed(p.apiKey)
+    apiKey: trimmed(p.apiKey),
+    // Last known camera list, persisted so the panel can reserve the right
+    // amount of space for it immediately on switching to this printer,
+    // instead of the layout jumping once a fresh fetch completes.
+    webcams: Array.isArray(p.webcams) ? p.webcams.map(normalizeCachedWebcam).filter(Boolean) : []
   };
 }
 
@@ -200,6 +204,25 @@ function parseWebcamsResponse(raw, printer, scheme) {
   } catch (e) {
     return [];
   }
+}
+
+// Validates one already-resolved webcam entry from printers.json (the shape
+// parseWebcamsResponse produces), so a hand-edited or stale cache entry
+// degrades to null (dropped) rather than feeding a malformed object into
+// CameraView.
+function normalizeCachedWebcam(cam) {
+  if (!isPlainObject(cam)) return null;
+  var streamUrl = trimmed(cam.streamUrl);
+  if (!streamUrl) return null;
+  return {
+    name: trimmed(cam.name) || "Camera",
+    streamUrl: streamUrl,
+    snapshotUrl: trimmed(cam.snapshotUrl),
+    flipHorizontal: cam.flipHorizontal === true,
+    flipVertical: cam.flipVertical === true,
+    rotation: [0, 90, 180, 270].indexOf(cam.rotation) !== -1 ? cam.rotation : 0,
+    aspectRatio: typeof cam.aspectRatio === "number" && cam.aspectRatio > 0 ? cam.aspectRatio : 0.75
+  };
 }
 
 // "4:3" -> 0.75 (height/width). Falls back to a plain 4:3 guess.

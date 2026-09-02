@@ -30,6 +30,12 @@ Panel {
   property bool addingPrinter: false
   property string editingPrinterId: ""
   property int switcherIndex: 0
+  // Keyboard-cursor highlight only appears once the keyboard is actually
+  // used — same convention as the Network plugin's cursorActive. Without
+  // this, switcherIndex's harmless default (0, i.e. the first row) reads as
+  // a second, stuck-looking highlight on whichever printer is listed first,
+  // independent of which one is actually active.
+  property bool cursorActive: false
 
   function selectedSwitcherPrinter() {
     if (printer.printers.length === 0) return null
@@ -153,6 +159,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
         if (printer.printers.length === 0 || dy === 0) return
+        root.cursorActive = true
         root.switcherIndex = Math.max(0, Math.min(root.switcherIndex + dy, printer.printers.length - 1))
       }
       onActivateRequested: {
@@ -198,7 +205,7 @@ Panel {
                 radius: Style.cornerRadius
                 color: modelData.id === printer.activePrinterId
                   ? Style.selectedFillFor(root.foreground, Color.accent)
-                  : (index === root.switcherIndex ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+                  : (root.cursorActive && index === root.switcherIndex ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
 
                 Row {
                   id: switcherRowContent
