@@ -394,6 +394,13 @@ Panel {
             }
           }
 
+          Rectangle {
+            width: parent.width - parent.leftPadding - parent.rightPadding
+            height: Style.spacing.hairline
+            color: root.foreground
+            opacity: 0.12
+          }
+
           // ---- empty state ----
           Text {
             visible: printer.printers.length === 0 && !root.addingPrinter
