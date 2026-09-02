@@ -13,8 +13,8 @@ import "Model.js" as Model
 // wiring the Weather plugin uses.
 Panel {
   id: root
-  moduleName: "klipper"
-  ipcTarget: "klipper"
+  moduleName: "io.github.trevjonez.klipper"
+  ipcTarget: "io.github.trevjonez.klipper"
   // This file declares its own IpcHandler on the same target so the settings
   // popup gets IPC functions alongside the printer popup's.
   manageIpc: false

@@ -34,9 +34,9 @@ ui_build_stage() {
   UI_STAGE="$(mktemp -d)"
   mkdir -p "$UI_STAGE/.config/omarchy/plugins" "$UI_STAGE/.local/state/omarchy-klipper"
 
-  mkdir -p "$UI_STAGE/.config/omarchy/plugins/klipper"
+  mkdir -p "$UI_STAGE/.config/omarchy/plugins/io.github.trevjonez.klipper"
   cp "$UI_ROOT"/*.qml "$UI_ROOT"/Model.js "$UI_ROOT"/manifest.json \
-     "$UI_STAGE/.config/omarchy/plugins/klipper/"
+     "$UI_STAGE/.config/omarchy/plugins/io.github.trevjonez.klipper/"
 
   # A single bar widget, so the pill's position is deterministic and the
   # cropped screenshot region is stable across runs. The bar sits at the
@@ -51,7 +51,7 @@ ui_build_stage() {
   "bar": {
     "position": "bottom",
     "transparent": false,
-    "layout": { "left": [], "center": [], "right": [ { "id": "klipper" } ] }
+    "layout": { "left": [], "center": [], "right": [ { "id": "io.github.trevjonez.klipper" } ] }
   },
   "plugins": []
 }
@@ -111,19 +111,19 @@ ui_start() {
 
   for i in $(seq 1 150); do
     kill -0 "$UI_SHELL_PID" 2>/dev/null || { ui_log "shell died"; tail -10 "$UI_STAGE/shell.log"; return 1; }
-    if qs ipc --pid "$UI_SHELL_PID" show 2>/dev/null | grep -q '^target klipper'; then
+    if qs ipc --pid "$UI_SHELL_PID" show 2>/dev/null | grep -q '^target io.github.trevjonez.klipper'; then
       ui_log "shell up on $UI_DISPLAY (pid $UI_SHELL_PID)"
       sleep 1   # let the bar finish its first paint
       return 0
     fi
     sleep 0.2
   done
-  ui_log "klipper never registered in the nested shell"
+  ui_log "plugin never registered in the nested shell"
   tail -10 "$UI_STAGE/shell.log"
   return 1
 }
 
-ui_ipc() { qs ipc --pid "$UI_SHELL_PID" call klipper "$@" >/dev/null 2>&1; }
+ui_ipc() { qs ipc --pid "$UI_SHELL_PID" call io.github.trevjonez.klipper "$@" >/dev/null 2>&1; }
 
 # Number of popup surfaces this plugin currently has mapped in the nested
 # compositor.

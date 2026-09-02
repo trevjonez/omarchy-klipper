@@ -6,6 +6,8 @@ controlling Klipper 3D printers through [Moonraker](https://moonraker.readthedoc
 [Fluidd](https://docs.fluidd.xyz/) use, so if your printer already serves
 either of those web UIs, this plugin can talk to it too.
 
+![Klipper bar widget](preview.png)
+
 ## Features
 
 - Real-time status: a persistent, subscribed websocket connection to
@@ -46,12 +48,26 @@ either of those web UIs, this plugin can talk to it too.
 - Click a camera feed to open it fullscreen, with the printer's name,
   status, file and progress drawn over it. Which fields appear is chosen
   per printer in its edit form. Escape or a click dismisses it; it is also
-  on IPC (`qs -p /usr/share/omarchy/shell ipc call klipper fullscreen`) so
+  on IPC (`qs -p /usr/share/omarchy/shell ipc call io.github.trevjonez.klipper fullscreen`) so
   it can be bound to a key.
 - Live webcam feed(s) inline in the popup, when the printer has one —
   discovered automatically via Moonraker, correctly oriented per its own
   flip/rotation settings. Falls back to a periodically-refreshed still
   image if a feed can't be decoded as video.
+
+## Screenshots
+
+The printer popup is above: printer switcher, live status, whichever sensors
+you picked, the camera, and controls.
+
+| All cameras (right-click) | App settings (middle-click) |
+| --- | --- |
+| ![Camera wall](docs/camera-wall.png) | ![Settings](docs/settings.png) |
+
+Clicking any feed opens it fullscreen, with the fields that printer selected
+drawn over it:
+
+![Fullscreen camera](docs/fullscreen.png)
 
 ## Requirements
 
@@ -69,14 +85,14 @@ either of those web UIs, this plugin can talk to it too.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/omarchy-klipper.git --enable
+omarchy plugin add https://github.com/trevjonez/omarchy-klipper.git --enable
 ```
 
 Or manually:
 
 ```bash
-git clone https://github.com/<you>/omarchy-klipper.git ~/.config/omarchy/plugins/klipper
-omarchy plugin enable klipper
+git clone https://github.com/trevjonez/omarchy-klipper.git ~/.config/omarchy/plugins/io.github.trevjonez.klipper
+omarchy plugin enable io.github.trevjonez.klipper
 ```
 
 Click the printer icon in the bar, then "+ Add printer" to configure your
@@ -97,10 +113,10 @@ Left-click the bar icon for the printer popup, middle-click for app settings.
 Both are also on IPC, so you can bind them to a key:
 
 ```bash
-qs -p /usr/share/omarchy/shell ipc call klipper toggle
-qs -p /usr/share/omarchy/shell ipc call klipper toggleSettings
-qs -p /usr/share/omarchy/shell ipc call klipper cameras      # all-camera wall
-qs -p /usr/share/omarchy/shell ipc call klipper fullscreen   # active printer
+qs -p /usr/share/omarchy/shell ipc call io.github.trevjonez.klipper toggle
+qs -p /usr/share/omarchy/shell ipc call io.github.trevjonez.klipper toggleSettings
+qs -p /usr/share/omarchy/shell ipc call io.github.trevjonez.klipper cameras      # all-camera wall
+qs -p /usr/share/omarchy/shell ipc call io.github.trevjonez.klipper fullscreen   # active printer
 ```
 
 Left-click the bar icon for the printer popup, middle-click for app settings,
@@ -162,8 +178,8 @@ since Hyprland cannot start headlessly on its Aquamarine backend.
 ## Uninstall
 
 ```bash
-omarchy plugin disable klipper
-rm -rf ~/.config/omarchy/plugins/klipper
+omarchy plugin disable io.github.trevjonez.klipper
+rm -rf ~/.config/omarchy/plugins/io.github.trevjonez.klipper
 ```
 
 ## Scope

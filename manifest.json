@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "klipper",
+  "id": "io.github.trevjonez.klipper",
   "name": "Klipper",
   "version": "1.0.0",
-  "author": "omarchy-klipper",
+  "author": "Trevor Jones",
   "license": "MIT",
   "description": "Monitor and control Klipper 3D printers (Mainsail/Fluidd/Moonraker) from the Omarchy bar.",
   "kinds": [
