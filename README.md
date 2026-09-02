@@ -130,6 +130,11 @@ had seen the write.
   websocket JSON-RPC the printers do. The websocket, `curl` and `inotify`
   paths all run for real; a test asserts both on what the components
   displayed and on what the server was actually asked for.
+- **layout** (`tst_layout`, part of the qml tier) — loads the real
+  `Panel.qml` with the shell's own modules staged beside it and measures its
+  layout: buttons wrap instead of overhanging at any width, and content
+  becomes scrollable when the screen is too short for it. Layout is computed
+  even where nothing rasterises, so this works headlessly.
 - **ui** — popup lifecycle against a second Omarchy shell running in a
   nested compositor with its own `HOME`, so it never touches your real bar
   or config. Synthetic-input tests need `ydotool`

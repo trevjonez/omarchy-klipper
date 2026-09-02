@@ -81,6 +81,15 @@ run_qml_test() {
   # shellcheck disable=SC2064
   trap "rm -rf '$stage'" RETURN
 
+  # A test that instantiates Panel.qml needs qs.Ui / qs.Commons, which
+  # Quickshell resolves relative to the config folder -- so the shell's module
+  # tree is staged alongside the plugin (1.9MB, cheap) rather than imported
+  # from /usr/share, which the blackhole rule would reject.
+  if [[ -f "test/qml/$name.needs-shell" ]]; then
+    cp -r /usr/share/omarchy/shell/. "$stage/" 2>/dev/null
+    cp CameraView.qml PrinterIcon.qml Panel.qml "$stage/"
+  fi
+
   cp Model.js PrinterConnection.qml GcodeWatcher.qml Service.qml "$stage/"
   cp test/qml/Harness.qml "$stage/"
   cp "$test_file" "$stage/"

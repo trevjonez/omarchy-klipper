@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -272,18 +273,27 @@ Panel {
         if (p) printer.setActivePrinter(p.id)
       }
 
-      Flickable {
+      // ScrollView, not a bare Flickable: the shell's own audio and network
+      // panels use it, so the wheel behaves the way every other panel on the
+      // system does and the scrollbar is the themed one rather than something
+      // hand-rolled. A raw Flickable scrolls with flick physics on a mouse
+      // wheel, which feels nothing like the rest of the desktop.
+      ScrollView {
         id: scroll
+        objectName: "printerScroll"
         anchors.fill: parent
-        contentWidth: width
-        contentHeight: content.implicitHeight
         clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        interactive: contentHeight > height
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        ScrollBar.vertical.policy: content.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+        Binding {
+          target: scroll.contentItem
+          property: "interactive"
+          value: content.implicitHeight > scroll.height
+        }
 
         Column {
           id: content
-          width: scroll.width
+          width: scroll.availableWidth
           spacing: Style.space(14)
           topPadding: Style.space(16)
           bottomPadding: Style.space(16)
@@ -605,7 +615,14 @@ Panel {
               width: parent.width
             }
 
-            Row {
+            // Flow, not Row: button labels change with state ("Cancel" ->
+            // "Confirm cancel", "E-STOP" -> "Confirm E-STOP") and an errored
+            // print shows four at once, which overflowed the panel and clipped
+            // the last button. Wrapping keeps them all reachable at any panel
+            // width, font size or display scale.
+            Flow {
+              objectName: "heroActions"
+              width: parent.width
               spacing: Style.space(10)
 
               KlipperButton {
@@ -901,7 +918,9 @@ Panel {
               width: parent.width
             }
 
-            Row {
+            Flow {
+              objectName: "editFormButtons"
+              width: parent.width
               spacing: Style.space(10)
               KlipperButton { buttonText: printer.testing ? "Testing…" : "Test"; onClicked: root.testCurrentForm() }
               KlipperButton { buttonText: root.editingPrinterId !== "" ? "Save" : "Add"; onClicked: root.commitPrinterForm() }
@@ -973,18 +992,22 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
     }
 
-    Flickable {
+    ScrollView {
       id: settingsScroll
+      objectName: "settingsScroll"
       anchors.fill: parent
-      contentWidth: width
-      contentHeight: settingsContent.implicitHeight
       clip: true
-      boundsBehavior: Flickable.StopAtBounds
-      interactive: contentHeight > height
+      ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+      ScrollBar.vertical.policy: settingsContent.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+      Binding {
+        target: settingsScroll.contentItem
+        property: "interactive"
+        value: settingsContent.implicitHeight > settingsScroll.height
+      }
 
       Column {
         id: settingsContent
-        width: settingsScroll.width
+        width: settingsScroll.availableWidth
         spacing: Style.space(14)
         topPadding: Style.space(16)
         bottomPadding: Style.space(16)
