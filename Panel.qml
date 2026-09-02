@@ -14,6 +14,9 @@ Panel {
   id: root
   moduleName: "klipper"
   ipcTarget: "klipper"
+  // This file declares its own IpcHandler on the same target so the settings
+  // popup gets IPC functions alongside the printer popup's.
+  manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.5)
@@ -39,6 +42,13 @@ Panel {
   // a second, stuck-looking highlight on whichever printer is listed first,
   // independent of which one is actually active.
   property bool cursorActive: false
+
+  // App settings live in their own popup on middle-click, separate from the
+  // printer popup. Both are anchored to the same bar pill; the bar's popout
+  // coordinator keys off KeyboardPanel.owner, so giving the settings panel a
+  // distinct owner (settingsOwner below) is what makes opening one close the
+  // other.
+  property bool settingsOpen: false
 
   function selectedSwitcherPrinter() {
     if (printer.printers.length === 0) return null
@@ -186,8 +196,13 @@ Panel {
     tooltipText: printer.activePrinter ? (printer.printerName + " — " + printer.stateLabel()) : "Klipper — no printer configured"
 
     onPressed: function(b) {
-      if (b === Qt.MiddleButton) printer.refresh()
-      else root.toggle()
+      if (b === Qt.MiddleButton) {
+        root.close()
+        root.settingsOpen = !root.settingsOpen
+      } else {
+        root.settingsOpen = false
+        root.toggle()
+      }
     }
   }
 
@@ -807,6 +822,272 @@ Panel {
           }
         }
       }
+    }
+  }
+
+  // KeyboardPanel.owner doubles as the bar's popout-coordinator key, so the
+  // settings panel needs an owner distinct from `root` for the bar to treat
+  // the two popups as rivals and close one when the other opens. It only has
+  // to answer close().
+  QtObject {
+    id: settingsOwner
+    property bool popoutSwitchClosing: false
+    function close() { root.settingsOpen = false }
+  }
+
+  // The base Panel's own IpcHandler only knows about the printer popup, so
+  // take over the target (manageIpc: false above) to expose the settings
+  // popup on it too — it can then be bound to a key like any other Omarchy
+  // panel instead of being reachable only by middle-clicking the bar pill.
+  IpcHandler {
+    target: root.ipcTarget
+
+    function open(): void { root.settingsOpen = false; root.open() }
+    function close(): void { root.settingsOpen = false; root.close() }
+    function show(): void { open() }
+    function hide(): void { close() }
+    function toggle(): void { root.settingsOpen = false; root.toggle() }
+
+    function openSettings(): void { root.close(); root.settingsOpen = true }
+    function closeSettings(): void { root.settingsOpen = false }
+    function toggleSettings(): void {
+      if (root.settingsOpen) { root.settingsOpen = false; return }
+      root.close()
+      root.settingsOpen = true
+    }
+  }
+
+  KeyboardPanel {
+    id: settingsPanel
+    anchorItem: button
+    bar: root.bar
+    owner: settingsOwner
+    open: root.settingsOpen
+    focusTarget: settingsKeyCatcher
+    contentWidth: settingsPanel.fittedContentWidth(Style.space(360))
+    contentHeight: settingsPanel.fittedContentHeight(settingsContent.implicitHeight)
+
+    // Seed the draft from what's persisted each time the panel opens, so a
+    // dismissed edit doesn't linger into the next open.
+    onOpenChanged: if (open) watchDirField.text = printer.appSettings.gcodeWatchDir
+
+    PanelKeyCatcher {
+      id: settingsKeyCatcher
+      anchors.fill: parent
+      blocked: watchDirField.activeFocus
+      onCloseRequested: root.settingsOpen = false
+      onTabRequested: function(direction) { root.switchPanel(direction) }
+    }
+
+    Flickable {
+      id: settingsScroll
+      anchors.fill: parent
+      contentWidth: width
+      contentHeight: settingsContent.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      interactive: contentHeight > height
+
+      Column {
+        id: settingsContent
+        width: settingsScroll.width
+        spacing: Style.space(14)
+        topPadding: Style.space(16)
+        bottomPadding: Style.space(16)
+        leftPadding: Style.space(16)
+        rightPadding: Style.space(16)
+
+        Text {
+          text: "Klipper settings"
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.subtitle
+        }
+
+        Column {
+          width: parent.width - parent.leftPadding - parent.rightPadding
+          spacing: Style.space(8)
+
+          Text {
+            text: "G-CODE WATCH FOLDER"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.letterSpacing: 1
+          }
+
+          Text {
+            text: "When a printer reads G-code from a network share, a file written from another machine never reaches its file watcher, so Moonraker never parses the metadata. Point this at that share and new files get scanned on every reachable printer."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+            width: parent.width
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            TextField {
+              id: watchDirField
+              width: parent.width - saveWatchDir.implicitWidth - Style.space(8)
+              placeholderText: "e.g. /mnt/unraid/GCodes (blank to disable)"
+              foreground: root.foreground
+              font.family: root.fontFamily
+              Keys.onReturnPressed: root.saveWatchDir()
+              Keys.onEscapePressed: root.settingsOpen = false
+            }
+
+            KlipperButton {
+              id: saveWatchDir
+              anchors.verticalCenter: parent.verticalCenter
+              buttonText: "Save"
+              onClicked: root.saveWatchDir()
+            }
+          }
+
+          SettingCheck {
+            width: parent.width
+            label: "Watch for new G-code"
+            checked: printer.appSettings.gcodeWatchEnabled
+            enabledRow: printer.appSettings.gcodeWatchDir !== ""
+            onToggled: printer.setAppSettings({ gcodeWatchEnabled: !printer.appSettings.gcodeWatchEnabled })
+          }
+
+          SettingCheck {
+            width: parent.width
+            label: "Defer scans while printing"
+            description: "A scan parses the whole file on the printer's own CPU. Holds new files until the job finishes."
+            checked: printer.appSettings.deferScanWhilePrinting
+            enabledRow: true
+            onToggled: printer.setAppSettings({ deferScanWhilePrinting: !printer.appSettings.deferScanWhilePrinting })
+          }
+
+          Text {
+            text: printer.watcher.status
+            color: printer.watcher.failed ? Color.urgent : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+            width: parent.width
+          }
+        }
+
+        Rectangle {
+          width: parent.width - parent.leftPadding - parent.rightPadding
+          height: Style.spacing.hairline
+          color: root.foreground
+          opacity: 0.12
+          visible: printer.watcher.activity.length > 0
+        }
+
+        Column {
+          width: parent.width - parent.leftPadding - parent.rightPadding
+          spacing: Style.space(6)
+          visible: printer.watcher.activity.length > 0
+
+          Text {
+            text: "RECENT SCANS"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.letterSpacing: 1
+          }
+
+          Repeater {
+            model: printer.watcher.activity
+
+            Column {
+              required property var modelData
+              width: parent.width
+              spacing: Style.space(2)
+
+              Text {
+                visible: modelData.file !== ""
+                text: modelData.at + "  " + modelData.file
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideMiddle
+                width: parent.width
+              }
+              Text {
+                text: modelData.text
+                color: modelData.tone === "error" ? Color.urgent : (modelData.tone === "warn" ? root.dim : Color.accent)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+                width: parent.width
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function saveWatchDir() {
+    printer.setAppSettings({ gcodeWatchDir: watchDirField.text })
+  }
+
+  // Checkbox row matching the edit form's sensor picker — same square, same
+  // full-row click target — with an optional second line of explanation.
+  component SettingCheck: Item {
+    id: check
+    property string label: ""
+    property string description: ""
+    property bool checked: false
+    property bool enabledRow: true
+    signal toggled()
+
+    implicitHeight: checkColumn.implicitHeight + Style.space(4)
+    opacity: enabledRow ? 1 : 0.45
+
+    Row {
+      id: checkColumn
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(8)
+
+      Rectangle {
+        width: Style.space(14)
+        height: Style.space(14)
+        radius: 3
+        y: Style.space(2)
+        color: check.checked ? Color.accent : "transparent"
+        border.width: 1
+        border.color: check.checked ? Color.accent : Qt.darker(root.foreground, 1.6)
+      }
+
+      Column {
+        width: parent.width - Style.space(22)
+        spacing: Style.space(2)
+
+        Text {
+          text: check.label
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
+        Text {
+          visible: check.description !== ""
+          text: check.description
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+          width: parent.width
+        }
+      }
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      enabled: check.enabledRow
+      cursorShape: Qt.PointingHandCursor
+      onClicked: check.toggled()
     }
   }
 

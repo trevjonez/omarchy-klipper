@@ -113,13 +113,36 @@ function printerDisplayName(printer) {
   return printer.name || printer.host || "Printer";
 }
 
+// ---------------------------------------------------------------- app settings
+
+var DEFAULT_APP_SETTINGS = {
+  gcodeWatchDir: "",
+  gcodeWatchEnabled: false,
+  deferScanWhilePrinting: true,
+  lastSeenEpoch: 0
+};
+
+function normalizeAppSettings(raw) {
+  var data = isPlainObject(raw) ? raw : {};
+  var dir = trimmed(data.gcodeWatchDir).replace(/\/+$/, "");
+  var epoch = parseInt(String(data.lastSeenEpoch), 10);
+  return {
+    gcodeWatchDir: dir,
+    // A watcher with no directory has nothing to watch, so "enabled" is only
+    // ever true alongside one — saves every consumer re-checking both.
+    gcodeWatchEnabled: dir !== "" && data.gcodeWatchEnabled !== false,
+    deferScanWhilePrinting: data.deferScanWhilePrinting !== false,
+    lastSeenEpoch: isFinite(epoch) && epoch > 0 ? epoch : 0
+  };
+}
+
 // Parses the plugin's own printers.json state file. Always returns a usable
 // shape (empty list) rather than throwing, so a corrupt/missing file degrades
 // to "no printers configured" instead of breaking the panel.
 function parsePrinters(raw) {
   try {
     var data = JSON.parse(String(raw || ""));
-    if (!isPlainObject(data)) return { activePrinterId: "", printers: [] };
+    if (!isPlainObject(data)) return { activePrinterId: "", printers: [], settings: normalizeAppSettings(null) };
     var list = Array.isArray(data.printers) ? data.printers : [];
     var printers = [];
     for (var i = 0; i < list.length; i++) {
@@ -130,15 +153,20 @@ function parsePrinters(raw) {
     if (!activePrinterId || !findPrinter(printers, activePrinterId)) {
       activePrinterId = printers.length > 0 ? printers[0].id : "";
     }
-    return { activePrinterId: activePrinterId, printers: printers };
+    return {
+      activePrinterId: activePrinterId,
+      printers: printers,
+      settings: normalizeAppSettings(data.settings)
+    };
   } catch (e) {
-    return { activePrinterId: "", printers: [] };
+    return { activePrinterId: "", printers: [], settings: normalizeAppSettings(null) };
   }
 }
 
 function serializePrinters(state) {
   return JSON.stringify({
     activePrinterId: state.activePrinterId || "",
+    settings: normalizeAppSettings(state.settings),
     printers: state.printers || []
   }, null, 2) + "\n";
 }
@@ -184,6 +212,79 @@ function gcodeActionUrl(printer, script, scheme) {
 
 function apiKeyHeaderArgs(printer) {
   return printer.apiKey ? ["-H", "X-Api-Key: " + printer.apiKey] : [];
+}
+
+// ---------------------------------------------------------------- gcode watching
+
+// Exactly Moonraker's VALID_GCODE_EXTS (file_manager.py) — it rejects a
+// metascan for anything else, so filtering here saves a guaranteed-failing
+// request per non-gcode file that lands in the watched tree.
+var GCODE_EXTS = [".gcode", ".g", ".gco", ".ufp", ".nc"];
+
+function isGcodePath(path) {
+  var lower = String(path || "").toLowerCase();
+  for (var i = 0; i < GCODE_EXTS.length; i++) {
+    if (lower.length > GCODE_EXTS[i].length && lower.slice(-GCODE_EXTS[i].length) === GCODE_EXTS[i]) return true;
+  }
+  return false;
+}
+
+// Maps an absolute local path under the watched directory onto the `filename`
+// Moonraker wants — i.e. the path relative to its own gcodes root. This is the
+// single place that mapping lives, and it only holds because the watched
+// directory *is* the same share the printers mount as their gcodes root.
+// Returns null for anything that shouldn't be scanned: outside the watch root,
+// under a hidden segment (.Trash-1000/, .thumbs/), or not a gcode file.
+function relativeGcodePath(watchDir, absPath) {
+  var root = trimmed(watchDir).replace(/\/+$/, "");
+  var full = trimmed(absPath);
+  if (!root || !full) return null;
+  if (full.slice(0, root.length + 1) !== root + "/") return null;
+  var rel = full.slice(root.length + 1).replace(/^\/+/, "");
+  if (!rel) return null;
+  var segments = rel.split("/");
+  for (var i = 0; i < segments.length; i++) {
+    if (segments[i] === "" || segments[i].charAt(0) === ".") return null;
+  }
+  return isGcodePath(rel) ? rel : null;
+}
+
+function metascanUrl(printer, relPath, scheme) {
+  return baseUrl(printer, scheme) + "/server/files/metascan?filename=" + encodeURIComponent(relPath);
+}
+
+// Long-lived stream of absolute paths, one per line. -r also picks up
+// directories created after start (verified), --exclude '/\.' keeps the
+// hidden trash/thumbnail trees out, and -q drops the banner lines so every
+// line on stdout is a real path.
+function inotifyArgs(dir) {
+  return ["inotifywait", "-m", "-r", "-q", "-e", "close_write", "-e", "moved_to",
+          "--exclude", "/\\.", "--format", "%w%f", dir];
+}
+
+// Catch-up sweep for files that landed while the shell wasn't running —
+// inotify can only report what happens while it's watching.
+function catchUpArgs(dir, sinceEpoch) {
+  return ["find", dir, "-type", "f", "-newermt", "@" + Math.max(0, sinceEpoch || 0),
+          "-not", "-path", "*/.*", "-print"];
+}
+
+// curl reports the HTTP status separately from the body, so a 404 ("this
+// printer's gcodes root doesn't contain that file") is distinguishable from a
+// genuine failure and can be reported as a skip rather than an error.
+function parseMetascanResult(exitCode, httpCode, stdout) {
+  var code = parseInt(String(httpCode), 10);
+  if (exitCode !== 0 && !isFinite(code)) return { ok: false, notFound: false, error: "unreachable" };
+  if (code === 200) return { ok: true, notFound: false, error: "" };
+  if (code === 404) return { ok: false, notFound: true, error: "not on this printer" };
+  var detail = "";
+  try {
+    var parsed = JSON.parse(String(stdout || ""));
+    if (isPlainObject(parsed) && isPlainObject(parsed.error)) detail = trimmed(parsed.error.message);
+  } catch (e) {
+    detail = "";
+  }
+  return { ok: false, notFound: false, error: detail || ("HTTP " + (isFinite(code) ? code : "error")) };
 }
 
 // ---------------------------------------------------------------- webcams
@@ -629,6 +730,15 @@ if (typeof module !== "undefined") {
     parseWebcamsResponse: parseWebcamsResponse,
     parseAspectRatio: parseAspectRatio,
     normalizeDisplaySensorEntry: normalizeDisplaySensorEntry,
+    DEFAULT_APP_SETTINGS: DEFAULT_APP_SETTINGS,
+    normalizeAppSettings: normalizeAppSettings,
+    GCODE_EXTS: GCODE_EXTS,
+    isGcodePath: isGcodePath,
+    relativeGcodePath: relativeGcodePath,
+    metascanUrl: metascanUrl,
+    inotifyArgs: inotifyArgs,
+    catchUpArgs: catchUpArgs,
+    parseMetascanResult: parseMetascanResult,
     objectTypeOf: objectTypeOf,
     isHeaterObject: isHeaterObject,
     isSensorObject: isSensorObject,

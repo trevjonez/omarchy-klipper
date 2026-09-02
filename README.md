@@ -33,6 +33,12 @@ either of those web UIs, this plugin can talk to it too.
 - Add/edit form has a "Test" button: it hits Moonraker before you save,
   fills the Name field in from the printer's own reported hostname if you
   left it blank, and pins down http vs https for you.
+- G-code metadata watcher (middle-click the bar icon for settings). If your
+  printers read G-code from a network share, a file you write from another
+  machine never reaches their file watchers, so Moonraker never parses its
+  metadata — the file shows up with no thumbnail, no estimated time, no
+  filament usage. Point the watcher at that share and each new `.gcode`
+  landing there is scanned on every reachable printer automatically.
 - Live webcam feed(s) inline in the popup, when the printer has one —
   discovered automatically via Moonraker, correctly oriented per its own
   flip/rotation settings. Falls back to a periodically-refreshed still
@@ -45,6 +51,8 @@ either of those web UIs, this plugin can talk to it too.
 - `qt6-websockets` and `qt6-multimedia` — install with
   `sudo pacman -S qt6-websockets qt6-multimedia` if either isn't already
   on your system.
+- `inotify-tools`, only if you use the G-code watcher
+  (`sudo pacman -S inotify-tools`).
 - If Moonraker's `[authorization]` section is configured with trusted
   clients only, generate an API key from Mainsail/Fluidd's settings page
   and paste it into the printer's entry — otherwise leave it blank.
@@ -71,9 +79,42 @@ automatically and remembers whichever answered; pasting an explicit
 
 ## Configuration
 
-Printers are stored at `~/.local/state/omarchy-klipper/printers.json` and
-managed entirely from the popup (add/edit/remove, switch active printer) —
-no manual file editing needed.
+Printers and app settings are stored at
+`~/.local/state/omarchy-klipper/printers.json` and managed entirely from the
+popups (add/edit/remove, switch active printer) — no manual file editing
+needed.
+
+Left-click the bar icon for the printer popup, middle-click for app settings.
+Both are also on IPC, so you can bind them to a key:
+
+```bash
+qs -p /usr/share/omarchy/shell ipc call klipper toggle
+qs -p /usr/share/omarchy/shell ipc call klipper toggleSettings
+```
+
+### G-code watcher
+
+Set the watch folder to the directory your slicer exports into — the same
+one your printers mount as their G-code root. When a `.gcode` (or `.g`,
+`.gco`, `.ufp`, `.nc`) file lands there, the plugin calls Moonraker's
+`/server/files/metascan` for it on every printer that's currently
+reachable, so the metadata is parsed as if the printer's own file watcher
+had seen the write.
+
+- Paths are used relative to the watch folder, so it must correspond to
+  each printer's own G-code root for a file to be found.
+- Subdirectories are watched too, including ones created after the watcher
+  starts. Hidden directories (`.Trash-1000`, `.thumbs`) are skipped.
+- Scans run one at a time; a scan parses the whole file on the printer's
+  CPU. "Defer scans while printing" (on by default) holds new files for a
+  busy printer until its job finishes.
+- A printer that's offline when a file lands is skipped — Moonraker parses
+  whatever metadata it's missing when it next starts up, so it catches up
+  on its own.
+- Files that land while the shell isn't running are picked up on next
+  start, capped at 50 per sweep so a bulk copy can't queue hours of work.
+  The first time you enable the watcher it starts from that moment rather
+  than scanning your whole existing library.
 
 ## Uninstall
 

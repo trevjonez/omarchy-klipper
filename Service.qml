@@ -20,6 +20,26 @@ Item {
 
   property var settings: ({})
 
+  // ---- app settings --------------------------------------------------------
+  // Deliberately not `settings` above — that one is the plugin host's manifest
+  // blob. These are the plugin's own settings, edited from the middle-click
+  // panel and persisted alongside the printer list.
+  property var appSettings: Model.normalizeAppSettings(null)
+
+  function setAppSettings(patch) {
+    var merged = Model.normalizeAppSettings(appSettings)
+    for (var key in patch) merged[key] = patch[key]
+    appSettings = Model.normalizeAppSettings(merged)
+    persistPrinters()
+  }
+
+  GcodeWatcher {
+    id: gcodeWatcher
+    service: root
+  }
+
+  readonly property var watcher: gcodeWatcher
+
   // ---- configured printers -------------------------------------------------
   property var printers: []
   property string activePrinterId: ""
@@ -404,7 +424,11 @@ Item {
   }
 
   function persistPrinters() {
-    printersFile.setText(Model.serializePrinters({ activePrinterId: activePrinterId, printers: printers }))
+    printersFile.setText(Model.serializePrinters({
+      activePrinterId: activePrinterId,
+      printers: printers,
+      settings: appSettings
+    }))
   }
 
   // ---------------------------------------------------------------- test connection
@@ -483,6 +507,7 @@ Item {
   function applyPrintersState(parsed) {
     printers = parsed.printers
     activePrinterId = parsed.activePrinterId
+    appSettings = parsed.settings
     var current = Model.findPrinter(printers, activePrinterId)
     webcams = current ? (current.webcams || []) : []
     fetchWebcams()
