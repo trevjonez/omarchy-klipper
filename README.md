@@ -116,6 +116,30 @@ had seen the write.
   The first time you enable the watcher it starts from that moment rather
   than scanning your whole existing library.
 
+## Testing
+
+```bash
+./test/run.sh          # unit + integration (the default)
+./test/run.sh --all    # adds lint and the popup tests
+```
+
+- **unit** — `Model.js`, the pure parsing/formatting/URL layer, under
+  `node --test`. Needs nothing but node and runs anywhere.
+- **qml** — the real `PrinterConnection`, `GcodeWatcher` and `Service`
+  hosted in `qs` against a mock Moonraker that speaks the same HTTP and
+  websocket JSON-RPC the printers do. The websocket, `curl` and `inotify`
+  paths all run for real; a test asserts both on what the components
+  displayed and on what the server was actually asked for.
+- **ui** — popup lifecycle against a second Omarchy shell running in a
+  nested compositor with its own `HOME`, so it never touches your real bar
+  or config. Synthetic-input tests need `ydotool`
+  (`omarchy dev install ydoo`) and skip cleanly without it.
+
+The mock has no dependencies — there is no `package.json` and nothing to
+install. The qml and ui tiers need a Wayland session; without one the runner
+starts a headless compositor, which requires `cage` (`sudo pacman -S cage`),
+since Hyprland cannot start headlessly on its Aquamarine backend.
+
 ## Uninstall
 
 ```bash

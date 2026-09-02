@@ -950,7 +950,9 @@ Panel {
           SettingCheck {
             width: parent.width
             label: "Watch for new G-code"
-            checked: printer.appSettings.gcodeWatchEnabled
+            // Shows whether watching is actually happening, not just whether
+            // it's wanted — the flag stays set while a folder is missing.
+            checked: printer.appSettings.gcodeWatchEnabled && printer.appSettings.gcodeWatchDir !== ""
             enabledRow: printer.appSettings.gcodeWatchDir !== ""
             onToggled: printer.setAppSettings({ gcodeWatchEnabled: !printer.appSettings.gcodeWatchEnabled })
           }

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Stub placed earlier on PATH than the real one during tests, so a
+# notification fired by Service.qml is captured instead of popping a toast on
+# the developer's desktop. Recording argv verbatim means the test asserts the
+# real command line, not a paraphrase of it.
+printf '%s\n' "$*" >> "${NOTIFY_LOG:-/dev/null}"

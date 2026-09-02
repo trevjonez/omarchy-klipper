@@ -85,17 +85,15 @@ function normalizePrinter(raw, fallbackId) {
 // adding a new persisted field only ever requires one edit, not one at
 // every call site that happens to construct a printer record by hand.
 function clonePrinterWith(printer, overrides) {
-  var base = {
-    id: printer.id,
-    name: printer.name,
-    host: printer.host,
-    port: printer.port,
-    scheme: printer.scheme,
-    apiKey: printer.apiKey,
-    webcams: printer.webcams || [],
-    displaySensors: printer.displaySensors || []
-  };
-  for (var key in (overrides || {})) base[key] = overrides[key];
+  // Copies whatever the record actually has rather than a fixed field list:
+  // this helper exists because hand-rebuilt printer records kept dropping the
+  // most recently added field, and enumerating fields here would reintroduce
+  // exactly that failure the next time one is added.
+  var base = {};
+  for (var key in (printer || {})) base[key] = printer[key];
+  if (!base.webcams) base.webcams = [];
+  if (!base.displaySensors) base.displaySensors = [];
+  for (var override in (overrides || {})) base[override] = overrides[override];
   return base;
 }
 
@@ -128,9 +126,13 @@ function normalizeAppSettings(raw) {
   var epoch = parseInt(String(data.lastSeenEpoch), 10);
   return {
     gcodeWatchDir: dir,
-    // A watcher with no directory has nothing to watch, so "enabled" is only
-    // ever true alongside one — saves every consumer re-checking both.
-    gcodeWatchEnabled: dir !== "" && data.gcodeWatchEnabled !== false,
+    // Records only whether the user wants watching, NOT whether it can
+    // currently run — GcodeWatcher pairs this with a non-empty directory.
+    // Folding "no directory" into false here instead would make the flag
+    // indistinguishable from an explicit opt-out after one normalize round
+    // trip, so setting a folder for the first time would leave the watcher
+    // silently switched off.
+    gcodeWatchEnabled: data.gcodeWatchEnabled !== false,
     deferScanWhilePrinting: data.deferScanWhilePrinting !== false,
     lastSeenEpoch: isFinite(epoch) && epoch > 0 ? epoch : 0
   };

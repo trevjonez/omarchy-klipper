@@ -21,7 +21,9 @@ Item {
 
   readonly property var settings: service ? service.appSettings : Model.normalizeAppSettings(null)
   readonly property string watchDir: settings.gcodeWatchDir
-  readonly property bool enabled: settings.gcodeWatchEnabled
+  // Wanting to watch and having somewhere to watch are stored separately (see
+  // Model.normalizeAppSettings); watching needs both.
+  readonly property bool enabled: settings.gcodeWatchEnabled && watchDir !== ""
   readonly property bool deferWhilePrinting: settings.deferScanWhilePrinting
 
   // Human-readable state for the settings panel. Anything that goes wrong here
@@ -53,9 +55,20 @@ Item {
   onEnabledChanged: {
     if (enabled) startWatching()
     else stopWatching()
+    syncWatchProcess()
   }
-  onWatchDirChanged: if (enabled) startWatching()
-  Component.onCompleted: if (enabled) startWatching()
+  onWatchDirChanged: {
+    if (enabled) startWatching()
+    syncWatchProcess()
+  }
+  on_BackoffChanged: syncWatchProcess()
+  Component.onCompleted: {
+    // stopWatching() rather than leaving the property default, so the idle
+    // status distinguishes "no folder configured" from "configured but off".
+    if (enabled) startWatching()
+    else stopWatching()
+    syncWatchProcess()
+  }
 
   function startWatching() {
     _backoff = false
@@ -231,10 +244,25 @@ Item {
 
   // ---------------------------------------------------------------- watching
 
+  // Started imperatively rather than by binding `running` and `command`
+  // separately: those are independent bindings, and when the settings arrive
+  // asynchronously (FileView loading printers.json at startup) QML is free to
+  // re-evaluate `running` before `command`. That started inotifywait with the
+  // previous, empty directory — "No files specified to watch!".
+  function syncWatchProcess() {
+    watchProcess.running = false
+    if (!enabled || _backoff) return
+    Qt.callLater(function() {
+      if (!root.enabled || root._backoff || root.watchDir === "") return
+      watchProcess.command = Model.inotifyArgs(root.watchDir)
+      watchProcess.running = true
+    })
+  }
+
   Process {
     id: watchProcess
-    running: root.enabled && root.watchDir !== "" && !root._backoff
-    command: Model.inotifyArgs(root.watchDir)
+    running: false
+    command: []
     stdout: SplitParser {
       splitMarker: "\n"
       onRead: function(line) { root.noteFile(line) }
