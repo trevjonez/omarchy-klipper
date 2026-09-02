@@ -68,8 +68,8 @@ Item {
   readonly property int progress: activeConnection ? activeConnection.progress : 0
   readonly property string filename: activeConnection ? activeConnection.filename : ""
   readonly property real printDurationSec: activeConnection ? activeConnection.printDurationSec : 0
-  readonly property var hotend: activeConnection ? activeConnection.hotend : ({ actual: null, target: null })
-  readonly property var bed: activeConnection ? activeConnection.bed : ({ actual: null, target: null })
+  // Keyed by object name — see PrinterConnection.sensors.
+  readonly property var sensors: activeConnection ? activeConnection.sensors : ({})
   // Enabled cameras for the active printer, from /server/webcams/list.
   // Refreshed far less often than status — cameras essentially never change.
   // Unrelated to the websocket status stream, so this stays HTTP-polled.
@@ -170,7 +170,21 @@ Item {
     for (var i = 0; i < list.length; i++) {
       if (list[i].id !== id) continue
       if (JSON.stringify(list[i].webcams || []) === JSON.stringify(webcams)) return
-      list[i] = { id: list[i].id, name: list[i].name, host: list[i].host, port: list[i].port, scheme: list[i].scheme, apiKey: list[i].apiKey, webcams: webcams }
+      list[i] = Model.clonePrinterWith(list[i], { webcams: webcams })
+      printers = list
+      persistPrinters()
+      return
+    }
+  }
+
+  // Saves which sensor objects/fields a printer should display — either the
+  // edit form's manual selection, or PrinterConnection's auto-seeded
+  // heater defaults on a printer's first-ever successful connect.
+  function setDisplaySensors(id, entries) {
+    var list = printers.slice()
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id !== id) continue
+      list[i] = Model.clonePrinterWith(list[i], { displaySensors: entries })
       printers = list
       persistPrinters()
       return
@@ -263,6 +277,49 @@ Item {
     }
   }
 
+  // ---------------------------------------------------------------- sensor discovery (edit form)
+
+  // Ephemeral — only needed while the edit form's "sensors to display"
+  // section is open, so this doesn't persist the way displaySensors itself
+  // does. One request at a time is fine here (unlike PrinterConnection's
+  // own auto-discover): a user can only have one edit form open at once.
+  property bool editDiscoveryLoading: false
+  property var editDiscoveryHeaters: []
+  property var editDiscoverySensors: []
+
+  function discoverSensorsFor(printer) {
+    if (!printer || discoverProcess.running) return
+    editDiscoveryLoading = true
+    editDiscoveryHeaters = []
+    editDiscoverySensors = []
+    discoverProcess.command = ["curl", "-fsS", "--max-time", "5"]
+      .concat(Model.apiKeyHeaderArgs(printer))
+      .concat([Model.objectsListUrl(printer, preferredScheme(printer))])
+    discoverProcess.running = true
+  }
+
+  function clearEditDiscovery() {
+    editDiscoveryLoading = false
+    editDiscoveryHeaters = []
+    editDiscoverySensors = []
+    discoverProcess.running = false
+  }
+
+  Process {
+    id: discoverProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: discoverStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.editDiscoveryLoading = false
+      var stdout = String(discoverStdout.text || "")
+      var names = exitCode === 0 && stdout !== "" ? Model.parseObjectsList(stdout) : []
+      var discovered = Model.discoverSensors(names)
+      root.editDiscoveryHeaters = discovered.heaters
+      root.editDiscoverySensors = discovered.sensors
+    }
+  }
+
   // ---------------------------------------------------------------- printer management
 
   function generateId() {
@@ -287,12 +344,12 @@ Item {
     var updated = null
     for (var i = 0; i < list.length; i++) {
       if (list[i].id === id) {
-        updated = Model.normalizePrinter(fields, id)
-        // The edit form only ever carries name/host/port/apiKey — a cached
-        // camera list has to be carried over explicitly or every edit would
-        // silently blank it out (and re-trigger the layout jump this cache
-        // exists to avoid) until the next 60s fetch.
-        updated.webcams = list[i].webcams || []
+        // fields carries the edit form's current state for everything it
+        // actually edits — name/host/port/apiKey/displaySensors — but never
+        // webcams (a read-only cache the form doesn't touch), so that has
+        // to be explicitly carried over or every edit would blank it out
+        // until the next 60s fetch.
+        updated = Model.clonePrinterWith(Model.normalizePrinter(fields, id), { webcams: list[i].webcams || [] })
         list[i] = updated
         break
       }
@@ -338,7 +395,7 @@ Item {
     var list = printers.slice()
     for (var i = 0; i < list.length; i++) {
       if (list[i].id === id) {
-        list[i] = { id: list[i].id, name: list[i].name, host: list[i].host, port: list[i].port, scheme: scheme, apiKey: list[i].apiKey, webcams: list[i].webcams || [] }
+        list[i] = Model.clonePrinterWith(list[i], { scheme: scheme })
         break
       }
     }

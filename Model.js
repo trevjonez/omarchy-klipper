@@ -69,8 +69,43 @@ function normalizePrinter(raw, fallbackId) {
     // Last known camera list, persisted so the panel can reserve the right
     // amount of space for it immediately on switching to this printer,
     // instead of the layout jumping once a fresh fetch completes.
-    webcams: Array.isArray(p.webcams) ? p.webcams.map(normalizeCachedWebcam).filter(Boolean) : []
+    webcams: Array.isArray(p.webcams) ? p.webcams.map(normalizeCachedWebcam).filter(Boolean) : [],
+    // Which temperature/sensor objects to show, and which field of each
+    // (for a multi-output sensor like bme280). [] means "not customized
+    // yet" — the connection auto-seeds this to the printer's heaters on
+    // first successful connect.
+    displaySensors: Array.isArray(p.displaySensors) ? p.displaySensors.map(normalizeDisplaySensorEntry).filter(Boolean) : []
   };
+}
+
+// Every place that patches one field of an already-normalized printer
+// record (pinning a discovered scheme, caching webcams, saving a sensor
+// selection) needs to carry every *other* field forward, or that patch
+// silently wipes whatever it didn't know about. Centralizing it here means
+// adding a new persisted field only ever requires one edit, not one at
+// every call site that happens to construct a printer record by hand.
+function clonePrinterWith(printer, overrides) {
+  var base = {
+    id: printer.id,
+    name: printer.name,
+    host: printer.host,
+    port: printer.port,
+    scheme: printer.scheme,
+    apiKey: printer.apiKey,
+    webcams: printer.webcams || [],
+    displaySensors: printer.displaySensors || []
+  };
+  for (var key in (overrides || {})) base[key] = overrides[key];
+  return base;
+}
+
+// Validates one persisted {object, field?} selection entry.
+function normalizeDisplaySensorEntry(entry) {
+  if (!isPlainObject(entry)) return null;
+  var object = trimmed(entry.object);
+  if (!object) return null;
+  var field = trimmed(entry.field);
+  return field ? { object: object, field: field } : { object: object };
 }
 
 function printerDisplayName(printer) {
@@ -131,9 +166,8 @@ function baseUrl(printer, scheme) {
   return effectiveScheme(printer, scheme) + "://" + printer.host + ":" + printer.port;
 }
 
-function queryUrl(printer, scheme) {
-  return baseUrl(printer, scheme) + "/printer/objects/query"
-    + "?webhooks&print_stats&display_status&virtual_sdcard&extruder&heater_bed";
+function objectsListUrl(printer, scheme) {
+  return baseUrl(printer, scheme) + "/printer/objects/list";
 }
 
 function infoUrl(printer, scheme) {
@@ -234,6 +268,128 @@ function parseAspectRatio(value) {
   return w > 0 && h > 0 ? h / w : 0.75;
 }
 
+// ---------------------------------------------------------------- sensors
+
+// Klipper object names are always "<type>" or "<type> <name>" — the type
+// alone tells you whether it's a controllable heater or a read-only
+// sensor, without needing to guess per-printer or trust Moonraker's own
+// `heaters` object (which hides a bme280's humidity/pressure behind its
+// plain temperature_sensor wrapper — see MULTI_FIELD_TYPES below).
+var HEATER_TYPES = { extruder: true, extruder1: true, extruder2: true, extruder3: true, heater_bed: true, heater_generic: true };
+var SENSOR_ONLY_TYPES = {
+  temperature_sensor: true, temperature_probe: true, temperature_host: true,
+  bme280: true, bme680: true, htu21d: true, sht3x: true, sht4x: true, aht10: true, si7021: true, lm75: true
+};
+// Fixed by the Klipper sensor driver itself, not per-instance — anything
+// not listed here only ever has one field (temperature), so it's selected
+// as a whole object rather than needing a per-field row.
+var MULTI_FIELD_TYPES = {
+  bme280: ["temperature", "humidity", "pressure"],
+  bme680: ["temperature", "humidity", "pressure", "gas"],
+  htu21d: ["temperature", "humidity"],
+  sht3x: ["temperature", "humidity"],
+  sht4x: ["temperature", "humidity"],
+  si7021: ["temperature", "humidity"],
+  aht10: ["temperature", "humidity"]
+};
+
+function objectTypeOf(name) {
+  var value = trimmed(name);
+  var space = value.indexOf(" ");
+  return space === -1 ? value : value.substring(0, space);
+}
+
+function objectFriendlyName(name) {
+  var value = trimmed(name);
+  var space = value.indexOf(" ");
+  return space === -1 ? "" : value.substring(space + 1);
+}
+
+function isHeaterObject(name) { return !!HEATER_TYPES[objectTypeOf(name)]; }
+function isSensorObject(name) { return isHeaterObject(name) || !!SENSOR_ONLY_TYPES[objectTypeOf(name)]; }
+
+// null = single-field/heater (whole-object selection); else the list of
+// fields this object's type can be individually selected by.
+function selectableFieldsFor(name) {
+  return MULTI_FIELD_TYPES[objectTypeOf(name)] || null;
+}
+
+function sensorLabel(name) {
+  var type = objectTypeOf(name);
+  var friendly = objectFriendlyName(name);
+  if (type === "extruder") return friendly || "Hotend";
+  if (type === "heater_bed") return "Bed";
+  if (type === "heater_generic") return friendly || "Heater";
+  if (friendly) return SENSOR_ONLY_TYPES[type] && MULTI_FIELD_TYPES[type] ? friendly + " (" + type.toUpperCase() + ")" : friendly;
+  return type;
+}
+
+var FIELD_LABELS = { temperature: "Temp", humidity: "Humidity", pressure: "Pressure", gas: "Gas" };
+
+function sensorFieldLabel(name, field) {
+  var base = sensorLabel(name);
+  if (!field) return base;
+  return base + " — " + (FIELD_LABELS[field] || field);
+}
+
+// Never throws: older Moonraker, or a request that fails, just means
+// "nothing discovered" rather than an error.
+function parseObjectsList(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    var list = data && data.result && data.result.objects;
+    return Array.isArray(list) ? list : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function discoverSensors(objectNames) {
+  var heaters = [];
+  var sensors = [];
+  for (var i = 0; i < objectNames.length; i++) {
+    var name = objectNames[i];
+    if (isHeaterObject(name)) heaters.push(name);
+    else if (isSensorObject(name)) sensors.push(name);
+  }
+  return { heaters: heaters, sensors: sensors };
+}
+
+// Whichever of temperature/target/humidity/pressure are actually present on
+// a raw status object for one printer object (e.g. status.extruder,
+// status["bme280 Ambient"]). null if none of them are.
+function extractSensorReading(rawObject) {
+  if (!isPlainObject(rawObject)) return null;
+  var reading = {};
+  var found = false;
+  ["temperature", "target", "humidity", "pressure"].forEach(function(key) {
+    if (typeof rawObject[key] === "number") { reading[key] = rawObject[key]; found = true; }
+  });
+  return found ? reading : null;
+}
+
+// The combined temp/target reading for a whole-object selection (heaters,
+// single-field sensors) — e.g. "47° / 0°" or just "24°" with no target.
+function formatSensorReading(reading) {
+  if (!reading || typeof reading.temperature !== "number") return "—";
+  var text = Math.round(reading.temperature) + "°";
+  if (typeof reading.target === "number") text += " / " + Math.round(reading.target) + "°";
+  return text;
+}
+
+// One selection entry's display value: the temp/target combo when `field`
+// is omitted, else just that one field in its own unit.
+function formatSensorEntry(reading, field) {
+  if (!reading) return "—";
+  if (!field) return formatSensorReading(reading);
+  var value = reading[field];
+  if (typeof value !== "number") return "—";
+  if (field === "humidity") return Math.round(value) + "% RH";
+  if (field === "pressure") return Math.round(value) + " hPa";
+  if (field === "temperature") return Math.round(value) + "°";
+  return String(value);
+}
+
 // ---------------------------------------------------------------- status
 
 var BUSY_STATES = { printing: true, paused: true };
@@ -247,11 +403,17 @@ var TERMINAL_STATES = { complete: true, cancelled: true, error: true };
 // state is stale the moment Klippy itself isn't ready. Pure: takes an
 // already-parsed object, never touches JSON directly, so both the one-shot
 // HTTP path and the websocket delta-merge path can share it.
-function extractStatus(status) {
+//
+// `sensorObjectNames` is the printer's own configured selection (unique
+// object names, not selection entries — see PrinterConnection) — sensors is
+// keyed by object, one entry per subscribed object, regardless of how many
+// of that object's fields are actually displayed.
+function extractStatus(status, sensorObjectNames) {
   if (!isPlainObject(status)) return { ok: false, error: "Unexpected response from Moonraker" };
 
   var webhooks = status.webhooks || {};
   var klippyState = trimmed(webhooks.state) || "unknown";
+  var names = sensorObjectNames || [];
 
   if (klippyState !== "ready") {
     return {
@@ -261,8 +423,7 @@ function extractStatus(status) {
       progress: 0,
       filename: "",
       printDurationSec: 0,
-      hotend: readHeater(null),
-      bed: readHeater(null)
+      sensors: {}
     };
   }
 
@@ -273,6 +434,12 @@ function extractStatus(status) {
   var progressFraction = displayStatus.progress;
   if (progressFraction === undefined || progressFraction === null) progressFraction = virtualSdcard.progress;
 
+  var sensors = {};
+  for (var i = 0; i < names.length; i++) {
+    var reading = extractSensorReading(status[names[i]]);
+    if (reading) sensors[names[i]] = reading;
+  }
+
   return {
     ok: true,
     state: trimmed(printStats.state) || "standby",
@@ -280,8 +447,7 @@ function extractStatus(status) {
     progress: clampInt(Math.round((Number(progressFraction) || 0) * 100), 0, 0, 100),
     filename: trimmed(printStats.filename),
     printDurationSec: Number(printStats.print_duration) || 0,
-    hotend: readHeater(status.extruder),
-    bed: readHeater(status.heater_bed)
+    sensors: sensors
   };
 }
 
@@ -317,11 +483,19 @@ function parseNotifyStatusUpdate(raw) {
   }
 }
 
-function subscribeRequestJson() {
+var BASE_SUBSCRIBE_OBJECTS = ["webhooks", "print_stats", "display_status", "virtual_sdcard"];
+
+// `sensorObjectNames` folds in the printer's own configured selection
+// (unique object names) alongside the fixed set every printer needs
+// regardless of what it displays.
+function subscribeRequestJson(sensorObjectNames) {
+  var objects = {};
+  BASE_SUBSCRIBE_OBJECTS.forEach(function(name) { objects[name] = null; });
+  (sensorObjectNames || []).forEach(function(name) { objects[name] = null; });
   return JSON.stringify({
     jsonrpc: "2.0",
     method: "printer.objects.subscribe",
-    params: { objects: { webhooks: null, print_stats: null, display_status: null, virtual_sdcard: null, extruder: null, heater_bed: null } },
+    params: { objects: objects },
     id: 1
   });
 }
@@ -348,23 +522,6 @@ function websocketUrl(printer, scheme) {
   // the same workaround browsers need for the same reason.
   if (printer.apiKey) url += "?token=" + encodeURIComponent(printer.apiKey);
   return url;
-}
-
-function parseStatusResponse(raw) {
-  try {
-    var data = JSON.parse(String(raw || ""));
-    return extractStatus(data && data.result && data.result.status);
-  } catch (e) {
-    return { ok: false, error: "Could not parse Moonraker response" };
-  }
-}
-
-function readHeater(heater) {
-  if (!isPlainObject(heater)) return { actual: null, target: null };
-  return {
-    actual: typeof heater.temperature === "number" ? heater.temperature : null,
-    target: typeof heater.target === "number" ? heater.target : null
-  };
 }
 
 function parseInfoResponse(raw) {
@@ -455,12 +612,13 @@ if (typeof module !== "undefined") {
     SCHEME_PROBE_ORDER: SCHEME_PROBE_ORDER,
     parseHostInput: parseHostInput,
     normalizePrinter: normalizePrinter,
+    clonePrinterWith: clonePrinterWith,
     printerDisplayName: printerDisplayName,
     parsePrinters: parsePrinters,
     serializePrinters: serializePrinters,
     findPrinter: findPrinter,
     baseUrl: baseUrl,
-    queryUrl: queryUrl,
+    objectsListUrl: objectsListUrl,
     infoUrl: infoUrl,
     actionUrl: actionUrl,
     gcodeActionUrl: gcodeActionUrl,
@@ -470,13 +628,24 @@ if (typeof module !== "undefined") {
     resolveWebcamUrl: resolveWebcamUrl,
     parseWebcamsResponse: parseWebcamsResponse,
     parseAspectRatio: parseAspectRatio,
+    normalizeDisplaySensorEntry: normalizeDisplaySensorEntry,
+    objectTypeOf: objectTypeOf,
+    isHeaterObject: isHeaterObject,
+    isSensorObject: isSensorObject,
+    selectableFieldsFor: selectableFieldsFor,
+    sensorLabel: sensorLabel,
+    sensorFieldLabel: sensorFieldLabel,
+    parseObjectsList: parseObjectsList,
+    discoverSensors: discoverSensors,
+    extractSensorReading: extractSensorReading,
+    formatSensorReading: formatSensorReading,
+    formatSensorEntry: formatSensorEntry,
     extractStatus: extractStatus,
     mergeStatusObjects: mergeStatusObjects,
     parseNotifyStatusUpdate: parseNotifyStatusUpdate,
     subscribeRequestJson: subscribeRequestJson,
     parseSubscribeResponse: parseSubscribeResponse,
     websocketUrl: websocketUrl,
-    parseStatusResponse: parseStatusResponse,
     parseInfoResponse: parseInfoResponse,
     stateLabel: stateLabel,
     stateTone: stateTone,

@@ -43,11 +43,53 @@ Panel {
     return printer.printers[idx]
   }
 
+  // Working copy of the sensor-picker's selection while the edit form is
+  // open — only written back via commitPrinterForm's Save, like every other
+  // field in the form.
+  property var editingSensorSelection: []
+
+  function isSensorSelected(object, field) {
+    for (var i = 0; i < editingSensorSelection.length; i++) {
+      var e = editingSensorSelection[i]
+      if (e.object === object && (e.field || "") === (field || "")) return true
+    }
+    return false
+  }
+
+  function toggleSensorSelection(object, field) {
+    var list = editingSensorSelection.slice()
+    var idx = -1
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].object === object && (list[i].field || "") === (field || "")) { idx = i; break }
+    }
+    if (idx !== -1) list.splice(idx, 1)
+    else list.push(field ? { object: object, field: field } : { object: object })
+    editingSensorSelection = list
+  }
+
+  // A multi-output sensor (bme280 etc.) becomes one selectable row per
+  // field; anything else stays a single whole-object row.
+  function flattenSensorRows(objectNames) {
+    var rows = []
+    var list = objectNames || []
+    for (var i = 0; i < list.length; i++) {
+      var name = list[i]
+      var fields = Model.selectableFieldsFor(name)
+      if (fields) {
+        for (var j = 0; j < fields.length; j++) rows.push({ object: name, field: fields[j] })
+      } else {
+        rows.push({ object: name, field: "" })
+      }
+    }
+    return rows
+  }
+
   function startAddPrinter() {
     managingPrinters = false
     addingPrinter = true
     editingPrinterId = ""
     printer.resetTestState()
+    editingSensorSelection = []
     Qt.callLater(function() {
       nameField.text = ""
       hostField.text = ""
@@ -62,6 +104,11 @@ Panel {
     addingPrinter = true
     editingPrinterId = p.id
     printer.resetTestState()
+    editingSensorSelection = (p.displaySensors || []).slice()
+    // No live connection exists yet for a printer that doesn't exist until
+    // Save, so this only ever runs for an already-configured printer —
+    // it's already connected, so discovery can run immediately.
+    printer.discoverSensorsFor(p)
     Qt.callLater(function() {
       nameField.text = p.name
       hostField.text = p.host
@@ -75,11 +122,13 @@ Panel {
     addingPrinter = false
     editingPrinterId = ""
     printer.resetTestState()
+    printer.clearEditDiscovery()
+    editingSensorSelection = []
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function currentFormFields() {
-    return { name: nameField.text, host: hostField.text, port: portField.text, apiKey: apiKeyField.text }
+    return { name: nameField.text, host: hostField.text, port: portField.text, apiKey: apiKeyField.text, displaySensors: editingSensorSelection }
   }
 
   function testCurrentForm() {
@@ -366,27 +415,30 @@ Panel {
               width: parent.width
             }
 
-            Row {
-              spacing: Style.space(28)
+            Flow {
+              width: parent.width
+              spacing: Style.space(20)
+              visible: printer.activePrinter && printer.activePrinter.displaySensors.length > 0
 
-              Column {
-                spacing: Style.space(2)
-                Text { text: "HOTEND"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.letterSpacing: 1 }
-                Text {
-                  text: printer.hotend.actual !== null ? (Math.round(printer.hotend.actual) + "° / " + Math.round(printer.hotend.target || 0) + "°") : "—"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                }
-              }
-              Column {
-                spacing: Style.space(2)
-                Text { text: "BED"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.letterSpacing: 1 }
-                Text {
-                  text: printer.bed.actual !== null ? (Math.round(printer.bed.actual) + "° / " + Math.round(printer.bed.target || 0) + "°") : "—"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
+              Repeater {
+                model: printer.activePrinter ? printer.activePrinter.displaySensors : []
+
+                Column {
+                  required property var modelData
+                  spacing: Style.space(2)
+                  Text {
+                    text: Model.sensorFieldLabel(modelData.object, modelData.field).toUpperCase()
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.letterSpacing: 1
+                  }
+                  Text {
+                    text: Model.formatSensorEntry(printer.sensors[modelData.object], modelData.field)
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
                 }
               }
             }
@@ -516,6 +568,142 @@ Panel {
               font.family: root.fontFamily
               Keys.onReturnPressed: root.commitPrinterForm()
               Keys.onEscapePressed: root.cancelEditPrinter()
+            }
+
+            // ---- sensors to display (existing printers only — a new one
+            // has no live connection to discover against until it's saved).
+            Column {
+              visible: root.editingPrinterId !== ""
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                text: "Sensors to display"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle
+              }
+
+              Text {
+                visible: printer.editDiscoveryLoading
+                text: "Checking what this printer has…"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Text {
+                visible: !printer.editDiscoveryLoading && printer.editDiscoveryHeaters.length === 0 && printer.editDiscoverySensors.length === 0
+                text: "Could not read this printer's sensors — make sure it's reachable, then reopen Edit."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
+                width: parent.width
+              }
+
+              Text {
+                visible: printer.editDiscoveryHeaters.length > 0
+                text: "HEATERS"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.letterSpacing: 1
+              }
+
+              Repeater {
+                model: printer.editDiscoveryHeaters
+
+                Item {
+                  id: heaterRow
+                  required property string modelData
+                  width: parent.width
+                  height: heaterRowContent.implicitHeight + Style.space(4)
+
+                  Row {
+                    id: heaterRowContent
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    Rectangle {
+                      width: Style.space(14)
+                      height: Style.space(14)
+                      radius: 3
+                      anchors.verticalCenter: parent.verticalCenter
+                      color: root.isSensorSelected(heaterRow.modelData, "") ? Color.accent : "transparent"
+                      border.width: 1
+                      border.color: root.isSensorSelected(heaterRow.modelData, "") ? Color.accent : Qt.darker(root.foreground, 1.6)
+                    }
+                    Text {
+                      text: Model.sensorLabel(heaterRow.modelData)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.toggleSensorSelection(heaterRow.modelData, "")
+                  }
+                }
+              }
+
+              Text {
+                visible: printer.editDiscoverySensors.length > 0
+                text: "OTHER SENSORS"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.letterSpacing: 1
+              }
+
+              Repeater {
+                // A multi-output sensor (bme280 etc.) expands into one row
+                // per field instead of one row for the whole object, per
+                // Model.selectableFieldsFor.
+                model: root.flattenSensorRows(printer.editDiscoverySensors)
+
+                Item {
+                  id: sensorRow
+                  required property var modelData
+                  width: parent.width
+                  height: sensorRowContent.implicitHeight + Style.space(4)
+
+                  Row {
+                    id: sensorRowContent
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    Rectangle {
+                      width: Style.space(14)
+                      height: Style.space(14)
+                      radius: 3
+                      anchors.verticalCenter: parent.verticalCenter
+                      color: root.isSensorSelected(sensorRow.modelData.object, sensorRow.modelData.field) ? Color.accent : "transparent"
+                      border.width: 1
+                      border.color: root.isSensorSelected(sensorRow.modelData.object, sensorRow.modelData.field) ? Color.accent : Qt.darker(root.foreground, 1.6)
+                    }
+                    Text {
+                      text: Model.sensorFieldLabel(sensorRow.modelData.object, sensorRow.modelData.field)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.toggleSensorSelection(sensorRow.modelData.object, sensorRow.modelData.field)
+                  }
+                }
+              }
             }
 
             Text {
