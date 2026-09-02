@@ -239,49 +239,121 @@ function parseAspectRatio(value) {
 var BUSY_STATES = { printing: true, paused: true };
 var TERMINAL_STATES = { complete: true, cancelled: true, error: true };
 
-// Normalizes a /printer/objects/query response into the flat shape the panel
-// renders. Klipper being up but not "ready" (still booting, or shut down
-// after an error) takes priority over whatever print_stats last reported,
-// since that state is stale the moment Klippy itself isn't ready.
+// Normalizes a raw Moonraker status object — the `result.status` shape
+// shared by /printer/objects/query's response AND printer.objects.subscribe's
+// success reply over the websocket — into the flat shape the panel renders.
+// Klipper being up but not "ready" (still booting, or shut down after an
+// error) takes priority over whatever print_stats last reported, since that
+// state is stale the moment Klippy itself isn't ready. Pure: takes an
+// already-parsed object, never touches JSON directly, so both the one-shot
+// HTTP path and the websocket delta-merge path can share it.
+function extractStatus(status) {
+  if (!isPlainObject(status)) return { ok: false, error: "Unexpected response from Moonraker" };
+
+  var webhooks = status.webhooks || {};
+  var klippyState = trimmed(webhooks.state) || "unknown";
+
+  if (klippyState !== "ready") {
+    return {
+      ok: true,
+      state: "klippy_" + klippyState,
+      message: trimmed(webhooks.state_message) || "Klipper is " + klippyState,
+      progress: 0,
+      filename: "",
+      printDurationSec: 0,
+      hotend: readHeater(null),
+      bed: readHeater(null)
+    };
+  }
+
+  var printStats = status.print_stats || {};
+  var displayStatus = status.display_status || {};
+  var virtualSdcard = status.virtual_sdcard || {};
+
+  var progressFraction = displayStatus.progress;
+  if (progressFraction === undefined || progressFraction === null) progressFraction = virtualSdcard.progress;
+
+  return {
+    ok: true,
+    state: trimmed(printStats.state) || "standby",
+    message: trimmed(printStats.message) || trimmed(displayStatus.message),
+    progress: clampInt(Math.round((Number(progressFraction) || 0) * 100), 0, 0, 100),
+    filename: trimmed(printStats.filename),
+    printDurationSec: Number(printStats.print_duration) || 0,
+    hotend: readHeater(status.extruder),
+    bed: readHeater(status.heater_bed)
+  };
+}
+
+// Shallow-merges a partial `notify_status_update` delta into the last known
+// full set of status objects. Moonraker only sends fields that changed
+// (e.g. {extruder: {temperature: 210.1}} with no `target`), so a naive
+// object replace would blank out everything the delta didn't mention.
+function mergeStatusObjects(current, delta) {
+  var base = isPlainObject(current) ? current : {};
+  var patch = isPlainObject(delta) ? delta : {};
+  var merged = {};
+  for (var key in base) merged[key] = base[key];
+  for (var deltaKey in patch) {
+    var existing = isPlainObject(merged[deltaKey]) ? merged[deltaKey] : {};
+    var patchValue = patch[deltaKey];
+    merged[deltaKey] = isPlainObject(patchValue) ? Object.assign({}, existing, patchValue) : patchValue;
+  }
+  return merged;
+}
+
+// A raw text frame from the websocket, if it's a notify_status_update push.
+// Returns null for anything else (other notify_* methods, the subscribe
+// response, malformed JSON) so the caller can just skip what it doesn't
+// recognize.
+function parseNotifyStatusUpdate(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    if (data.method !== "notify_status_update") return null;
+    var delta = data.params && data.params[0];
+    return isPlainObject(delta) ? delta : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function subscribeRequestJson() {
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    method: "printer.objects.subscribe",
+    params: { objects: { webhooks: null, print_stats: null, display_status: null, virtual_sdcard: null, extruder: null, heater_bed: null } },
+    id: 1
+  });
+}
+
+// The subscribe response has an id matching subscribeRequestJson's (1) and a
+// result.status — same shape extractStatus already understands. Returns
+// null for anything else (a notify_* push, an error reply).
+function parseSubscribeResponse(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    if (data.id !== 1 || !data.result) return null;
+    var status = data.result.status;
+    return isPlainObject(status) ? status : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function websocketUrl(printer, scheme) {
+  var wsScheme = effectiveScheme(printer, scheme) === "https" ? "wss" : "ws";
+  var url = wsScheme + "://" + printer.host + ":" + printer.port + "/websocket";
+  // A websocket handshake can't carry a custom header the way the HTTP paths
+  // send X-Api-Key, so Moonraker accepts the key as a query param instead —
+  // the same workaround browsers need for the same reason.
+  if (printer.apiKey) url += "?token=" + encodeURIComponent(printer.apiKey);
+  return url;
+}
+
 function parseStatusResponse(raw) {
   try {
     var data = JSON.parse(String(raw || ""));
-    var status = data && data.result && data.result.status;
-    if (!isPlainObject(status)) return { ok: false, error: "Unexpected response from Moonraker" };
-
-    var webhooks = status.webhooks || {};
-    var klippyState = trimmed(webhooks.state) || "unknown";
-
-    if (klippyState !== "ready") {
-      return {
-        ok: true,
-        state: "klippy_" + klippyState,
-        message: trimmed(webhooks.state_message) || "Klipper is " + klippyState,
-        progress: 0,
-        filename: "",
-        printDurationSec: 0,
-        hotend: readHeater(null),
-        bed: readHeater(null)
-      };
-    }
-
-    var printStats = status.print_stats || {};
-    var displayStatus = status.display_status || {};
-    var virtualSdcard = status.virtual_sdcard || {};
-
-    var progressFraction = displayStatus.progress;
-    if (progressFraction === undefined || progressFraction === null) progressFraction = virtualSdcard.progress;
-
-    return {
-      ok: true,
-      state: trimmed(printStats.state) || "standby",
-      message: trimmed(printStats.message) || trimmed(displayStatus.message),
-      progress: clampInt(Math.round((Number(progressFraction) || 0) * 100), 0, 0, 100),
-      filename: trimmed(printStats.filename),
-      printDurationSec: Number(printStats.print_duration) || 0,
-      hotend: readHeater(status.extruder),
-      bed: readHeater(status.heater_bed)
-    };
+    return extractStatus(data && data.result && data.result.status);
   } catch (e) {
     return { ok: false, error: "Could not parse Moonraker response" };
   }
@@ -398,6 +470,12 @@ if (typeof module !== "undefined") {
     resolveWebcamUrl: resolveWebcamUrl,
     parseWebcamsResponse: parseWebcamsResponse,
     parseAspectRatio: parseAspectRatio,
+    extractStatus: extractStatus,
+    mergeStatusObjects: mergeStatusObjects,
+    parseNotifyStatusUpdate: parseNotifyStatusUpdate,
+    subscribeRequestJson: subscribeRequestJson,
+    parseSubscribeResponse: parseSubscribeResponse,
+    websocketUrl: websocketUrl,
     parseStatusResponse: parseStatusResponse,
     parseInfoResponse: parseInfoResponse,
     stateLabel: stateLabel,

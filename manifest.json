@@ -17,20 +17,6 @@
     "description": "Print progress, temperatures, and pause/resume/cancel/e-stop controls for Klipper printers via Moonraker.",
     "category": "Info",
     "allowMultiple": false,
-    "defaultSection": "right",
-    "defaults": {
-      "refreshIntervalSec": 3
-    },
-    "schema": [
-      {
-        "key": "refreshIntervalSec",
-        "type": "integer",
-        "label": "Refresh interval (seconds)",
-        "min": 1,
-        "max": 60,
-        "step": 1,
-        "defaultValue": 3
-      }
-    ]
+    "defaultSection": "right"
   }
 }

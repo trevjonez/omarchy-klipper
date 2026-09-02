@@ -219,7 +219,11 @@ Panel {
                     height: Style.space(8)
                     radius: width / 2
                     anchors.verticalCenter: parent.verticalCenter
-                    color: switcherRow.modelData.id === printer.activePrinterId && printer.reachable ? Color.accent : root.dim
+                    // Every row gets a live connection now, not just the
+                    // active one — free bonus of always-on per-printer
+                    // websockets: you can see who's online before switching.
+                    readonly property var connection: printer.connectionFor(switcherRow.modelData.id)
+                    color: connection && connection.reachable ? Color.accent : root.dim
                   }
 
                   Text {

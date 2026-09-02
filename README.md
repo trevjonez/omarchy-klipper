@@ -8,16 +8,24 @@ either of those web UIs, this plugin can talk to it too.
 
 ## Features
 
+- Real-time status: a persistent, subscribed websocket connection to
+  *every* configured printer (not just the one showing in the bar) via
+  Moonraker's JSON-RPC API. Switching printers is instant — no request in
+  flight, the data's already live — and a background printer's print
+  finishing/erroring is caught and notified the moment Moonraker reports
+  it, not on the next poll.
 - Bar pill showing printer state at a glance (idle / printing / paused /
   error / unreachable), with the toolhead sweeping the icon's rail
   proportional to print progress.
 - Popup with live progress, elapsed/remaining time, filename, and
-  hotend/bed temperatures.
+  hotend/bed temperatures. The printer switcher shows live reachability
+  for every configured printer, not just the active one.
 - Pause, resume, cancel (confirm), emergency stop (confirm), and restart
   Klipper after an error.
-- Multiple printers: add as many as you like, switch which one is active
-  (polled and shown in the bar) from the popup.
-- Desktop notification when a print completes, is cancelled, or errors.
+- Multiple printers: add as many as you like, switch which one is shown
+  in the bar from the popup.
+- Desktop notification when any configured printer's print completes, is
+  cancelled, or errors — whether or not it's the one currently selected.
 - Add/edit form has a "Test" button: it hits Moonraker before you save,
   fills the Name field in from the printer's own reported hostname if you
   left it blank, and pins down http vs https for you.
@@ -30,6 +38,9 @@ either of those web UIs, this plugin can talk to it too.
 
 - A Klipper printer with Moonraker running and reachable on your network.
 - `curl` (already present on every Omarchy install).
+- `qt6-websockets` and `qt6-multimedia` — install with
+  `sudo pacman -S qt6-websockets qt6-multimedia` if either isn't already
+  on your system.
 - If Moonraker's `[authorization]` section is configured with trusted
   clients only, generate an API key from Mainsail/Fluidd's settings page
   and paste it into the printer's entry — otherwise leave it blank.
@@ -59,17 +70,6 @@ automatically and remembers whichever answered; pasting an explicit
 Printers are stored at `~/.local/state/omarchy-klipper/printers.json` and
 managed entirely from the popup (add/edit/remove, switch active printer) —
 no manual file editing needed.
-
-The status refresh interval (default 3 seconds) is set the same way as
-other first-party widgets with a tunable interval, by editing this widget's
-entry in `~/.config/omarchy/shell.json`:
-
-```jsonc
-{
-  "key": "refreshIntervalSec",
-  "value": 3
-}
-```
 
 ## Uninstall
 

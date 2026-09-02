@@ -1,13 +1,20 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import QtQml.Models
 import "Model.js" as Model
 
-// Holds all Klipper/Moonraker state: the configured printer list (persisted
-// to disk), the live status of whichever printer is active, and the
-// pause/resume/cancel/e-stop/restart actions. Structured like the first-party
-// Tailscale plugin's Service.qml — one Item owning Timers/Processes, read and
-// driven by Panel.qml.
+// Coordinates the configured printer list (persisted to disk) and one
+// persistent PrinterConnection (websocket) per configured printer — not
+// just the active one, so switching printers is instant (no request in
+// flight) and a background printer's print-finished/error notification
+// fires the moment it happens rather than up to a poll interval later.
+// This Item itself owns only: printer config CRUD, webcam-list fetching
+// (still HTTP — orthogonal to status streaming), pause/resume/cancel/e-stop/
+// restart-firmware actions (also still HTTP — one-shot user actions, not a
+// latency-sensitive stream), and the add/edit form's Test button. Live
+// status display properties are thin pass-throughs to whichever
+// PrinterConnection matches activePrinterId.
 Item {
   id: root
 
@@ -18,19 +25,54 @@ Item {
   property string activePrinterId: ""
   readonly property var activePrinter: Model.findPrinter(printers, activePrinterId)
 
-  // ---- live status of the active printer -----------------------------------
-  property bool reachable: false
-  property string state: ""
-  property string message: ""
-  property int progress: 0
-  property string filename: ""
-  property real printDurationSec: 0
-  property var hotend: ({ actual: null, target: null })
-  property var bed: ({ actual: null, target: null })
-  property bool refreshing: false
-  property string lastError: ""
+  // Stable id list so the Instantiator below only recreates PrinterConnection
+  // instances (and their websockets) when a printer is actually added or
+  // removed — never on the routine printers[] rewrites that scheme/webcam
+  // pinning already do on every successful poll.
+  property var printerIds: []
+
+  function syncPrinterIds() {
+    var ids = printers.map(function(p) { return p.id })
+    var currentKey = printerIds.slice().sort().join(",")
+    var newKey = ids.slice().sort().join(",")
+    if (currentKey !== newKey) printerIds = ids
+  }
+
+  onPrintersChanged: syncPrinterIds()
+
+  function connectionFor(id) {
+    if (!id) return null
+    for (var i = 0; i < connections.count; i++) {
+      var obj = connections.objectAt(i)
+      if (obj && obj.printerId === id) return obj
+    }
+    return null
+  }
+
+  Instantiator {
+    id: connections
+    model: root.printerIds
+    delegate: PrinterConnection {
+      printerId: modelData
+      printers: root.printers
+      service: root
+    }
+  }
+
+  readonly property var activeConnection: connectionFor(activePrinterId)
+
+  // ---- live status of the active printer — pass-throughs to its connection
+  readonly property bool reachable: activeConnection ? activeConnection.reachable : false
+  readonly property string state: activeConnection ? activeConnection.state : ""
+  readonly property string message: activeConnection ? activeConnection.message : ""
+  readonly property int progress: activeConnection ? activeConnection.progress : 0
+  readonly property string filename: activeConnection ? activeConnection.filename : ""
+  readonly property real printDurationSec: activeConnection ? activeConnection.printDurationSec : 0
+  readonly property var hotend: activeConnection ? activeConnection.hotend : ({ actual: null, target: null })
+  readonly property var bed: activeConnection ? activeConnection.bed : ({ actual: null, target: null })
   // Enabled cameras for the active printer, from /server/webcams/list.
   // Refreshed far less often than status — cameras essentially never change.
+  // Unrelated to the websocket status stream, so this stays HTTP-polled.
   property var webcams: []
 
   // ---- action feedback ------------------------------------------------------
@@ -38,14 +80,6 @@ Item {
   // "" | "cancel" | "estop" — a destructive action armed by one press, run by
   // a second press within confirmTimer's window.
   property string pendingConfirm: ""
-
-  // ---- scheme detection -------------------------------------------------
-  // Used only while the active printer has no scheme pinned (neither typed
-  // into the host field nor learned yet). Reset whenever the active printer
-  // changes; the first successful poll pins the winning scheme onto the
-  // printer record so later polls never have to probe again.
-  property string schemeGuess: "http"
-  property bool _triedFallbackScheme: false
 
   // ---- test-connection (add/edit form) -----------------------------------
   property bool testing: false
@@ -60,87 +94,26 @@ Item {
   property var _testSchemeQueue: []
   property string _testCurrentScheme: ""
 
-  readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 3, 1, 60)
-  readonly property bool busy: statusProcess.running || actionProcess.running
   readonly property string printerName: activePrinter ? Model.printerDisplayName(activePrinter) : ""
   readonly property int remainingSec: Model.estimateRemainingSec(progress, printDurationSec) || 0
   readonly property bool hasRemainingEstimate: Model.estimateRemainingSec(progress, printDurationSec) !== null
-
-  function setting(name, fallback) {
-    var value = settings ? settings[name] : undefined
-    return value === undefined || value === null ? fallback : value
-  }
-
-  function intSetting(name, fallback, min, max) {
-    var n = parseInt(String(setting(name, fallback)), 10)
-    if (!isFinite(n)) n = fallback
-    if (n < min) n = min
-    if (n > max) n = max
-    return n
-  }
 
   function stateLabel() { return Model.stateLabel(root.state) }
   function stateTone() { return Model.stateTone(root.state) }
   function formatDuration(sec) { return Model.formatDuration(sec) }
 
-  // ---------------------------------------------------------------- polling
-
-  // The scheme actually used for the next request: the printer's own pinned
-  // scheme when it has one, else whichever one is currently being probed.
-  function activeScheme() {
-    return (activePrinter && (activePrinter.scheme === "http" || activePrinter.scheme === "https"))
-      ? activePrinter.scheme : schemeGuess
+  // Scheme for one-shot HTTP calls (webcams fetch, actions): whatever this
+  // printer's connection has already pinned, else a plain http guess — these
+  // aren't latency-sensitive and only ever run once a printer is already
+  // showing live status (so its real scheme has normally been pinned by
+  // then), so no probing dance needed here the way the websocket connection
+  // itself has to do it for a never-before-seen printer.
+  function preferredScheme(printer) {
+    return (printer && (printer.scheme === "http" || printer.scheme === "https")) ? printer.scheme : "http"
   }
 
-  function refresh() {
-    if (!activePrinter) {
-      resetStatus("")
-      return
-    }
-    if (statusProcess.running) return
-    refreshing = true
-    var printer = activePrinter
-    var scheme = activeScheme()
-    statusProcess.command = ["curl", "-fsS", "--max-time", "4"]
-      .concat(Model.apiKeyHeaderArgs(printer))
-      .concat([Model.queryUrl(printer, scheme)])
-    statusProcess.running = true
-    if (!pollWatchdog.running) pollWatchdog.restart()
-  }
-
-  function resetStatus(withState) {
-    reachable = false
-    state = withState
-    message = ""
-    progress = 0
-    filename = ""
-    printDurationSec = 0
-    hotend = { actual: null, target: null }
-    bed = { actual: null, target: null }
-  }
-
-  function applyOffline(reason) {
-    resetStatus("offline")
-    message = reason || "Unreachable"
-    lastError = message
-  }
-
-  function applyParsedStatus(parsed) {
-    var notif = Model.notificationForTransition(root.state, parsed.state, root.printerName, parsed.filename, parsed.message)
-    reachable = true
-    lastError = ""
-    state = parsed.state
-    message = parsed.message
-    progress = parsed.progress
-    filename = parsed.filename
-    printDurationSec = parsed.printDurationSec
-    hotend = parsed.hotend
-    bed = parsed.bed
-    if (notif) sendNotification(notif)
-  }
-
-  function sendNotification(notif) {
-    var key = root.activePrinterId + "|" + notif.headline
+  function sendNotification(printerId, notif) {
+    var key = printerId + "|" + notif.headline
     if (persisted.notifiedFor === key) return
     persisted.notifiedFor = key
     Quickshell.execDetached(["omarchy-notification-send", "-u", notif.urgency, notif.headline, notif.body])
@@ -152,22 +125,13 @@ Item {
     property string notifiedFor: ""
   }
 
-  Timer {
-    id: refreshTimer
-    interval: root.refreshIntervalSec * 1000
-    repeat: true
-    running: root.activePrinter !== null
-    triggeredOnStart: true
-    onTriggered: root.refresh()
-  }
-
   // ---------------------------------------------------------------- webcams
 
   function fetchWebcams() {
     if (!activePrinter || webcamsProcess.running) return
     webcamsProcess.command = ["curl", "-fsS", "--max-time", "4"]
       .concat(Model.apiKeyHeaderArgs(activePrinter))
-      .concat([Model.webcamsUrl(activePrinter, activeScheme())])
+      .concat([Model.webcamsUrl(activePrinter, preferredScheme(activePrinter))])
     webcamsProcess.running = true
   }
 
@@ -190,7 +154,7 @@ Item {
     onExited: function(exitCode) {
       var stdout = String(webcamsStdout.text || "")
       if (exitCode !== 0 || stdout === "") return // leave the cached list showing rather than collapsing it
-      var parsed = Model.parseWebcamsResponse(stdout, root.activePrinter, root.activeScheme())
+      var parsed = Model.parseWebcamsResponse(stdout, root.activePrinter, preferredScheme(root.activePrinter))
       root.webcams = parsed
       // Persisted per-printer so the panel can size the camera area
       // correctly the instant this printer is selected again, before this
@@ -214,17 +178,6 @@ Item {
   }
 
   Timer {
-    // A hung curl (printer mid-reboot, flaky wifi) must not silently freeze
-    // the pill on stale data forever — reap it well inside the refresh
-    // interval so the next tick starts clean. Same idea as Tailscale's
-    // pollWatchdog.
-    id: pollWatchdog
-    interval: 10000
-    repeat: false
-    onTriggered: if (statusProcess.running) statusProcess.running = false
-  }
-
-  Timer {
     id: actionStatusTimer
     interval: 2200
     repeat: false
@@ -236,52 +189,6 @@ Item {
     interval: 4000
     repeat: false
     onTriggered: { root.pendingConfirm = ""; root.actionStatus = "" }
-  }
-
-  Timer {
-    id: delayedRefresh
-    interval: 500
-    repeat: false
-    onTriggered: root.refresh()
-  }
-
-  Process {
-    id: statusProcess
-    running: false
-    command: []
-    stdout: StdioCollector { id: statusStdout; waitForEnd: true }
-    stderr: StdioCollector { id: statusStderr; waitForEnd: true }
-    onExited: function(exitCode) {
-      root.refreshing = false
-      var stdout = String(statusStdout.text || "")
-      var printerHasPinnedScheme = root.activePrinter && (root.activePrinter.scheme === "http" || root.activePrinter.scheme === "https")
-
-      if (exitCode !== 0 || stdout === "") {
-        // No scheme pinned yet and we haven't tried the other one this
-        // round — flip and retry once before giving up as unreachable.
-        if (!printerHasPinnedScheme && !root._triedFallbackScheme) {
-          root._triedFallbackScheme = true
-          root.schemeGuess = root.schemeGuess === "http" ? "https" : "http"
-          root.refresh()
-          return
-        }
-        root._triedFallbackScheme = false
-        root.applyOffline("Unreachable")
-        return
-      }
-
-      root._triedFallbackScheme = false
-      var parsed = Model.parseStatusResponse(stdout)
-      if (!parsed.ok) {
-        root.applyOffline(parsed.error || "Bad response from Moonraker")
-        return
-      }
-      // Learned a working scheme for a printer that didn't have one pinned —
-      // persist it so every later poll goes straight there instead of
-      // probing twice each time.
-      if (!printerHasPinnedScheme) root.pinPrinterScheme(root.activePrinterId, root.schemeGuess)
-      root.applyParsedStatus(parsed)
-    }
   }
 
   // ---------------------------------------------------------------- actions
@@ -297,7 +204,7 @@ Item {
 
   function togglePauseResume() {
     if (!activePrinter) return
-    var scheme = activeScheme()
+    var scheme = preferredScheme(activePrinter)
     if (state === "printing") runAction(Model.actionUrl(activePrinter, "/printer/print/pause", scheme), "Pausing…")
     else if (state === "paused") runAction(Model.actionUrl(activePrinter, "/printer/print/resume", scheme), "Resuming…")
   }
@@ -307,7 +214,7 @@ Item {
     if (pendingConfirm === "cancel") {
       pendingConfirm = ""
       confirmTimer.stop()
-      runAction(Model.actionUrl(activePrinter, "/printer/print/cancel", activeScheme()), "Cancelling…")
+      runAction(Model.actionUrl(activePrinter, "/printer/print/cancel", preferredScheme(activePrinter)), "Cancelling…")
       return
     }
     pendingConfirm = "cancel"
@@ -320,7 +227,7 @@ Item {
     if (pendingConfirm === "estop") {
       pendingConfirm = ""
       confirmTimer.stop()
-      runAction(Model.actionUrl(activePrinter, "/printer/emergency_stop", activeScheme()), "Emergency stop sent")
+      runAction(Model.actionUrl(activePrinter, "/printer/emergency_stop", preferredScheme(activePrinter)), "Emergency stop sent")
       return
     }
     pendingConfirm = "estop"
@@ -330,7 +237,7 @@ Item {
 
   function restartFirmware() {
     if (!activePrinter) return
-    runAction(Model.actionUrl(activePrinter, "/printer/firmware_restart", activeScheme()), "Restarting Klipper…")
+    runAction(Model.actionUrl(activePrinter, "/printer/firmware_restart", preferredScheme(activePrinter)), "Restarting Klipper…")
   }
 
   function cancelPendingConfirm() {
@@ -353,7 +260,6 @@ Item {
       } else {
         root.actionStatus = ""
       }
-      delayedRefresh.restart()
     }
   }
 
@@ -372,7 +278,7 @@ Item {
     printers = list
     if (!activePrinterId) activePrinterId = printer.id
     persistPrinters()
-    if (activePrinterId === printer.id) refresh()
+    if (activePrinterId === printer.id) fetchWebcams()
     return true
   }
 
@@ -394,10 +300,7 @@ Item {
     if (!updated) return
     printers = list
     persistPrinters()
-    if (id === activePrinterId) {
-      webcams = updated.webcams
-      refresh()
-    }
+    if (id === activePrinterId) webcams = updated.webcams
   }
 
   function removePrinter(id) {
@@ -405,40 +308,32 @@ Item {
     printers = list
     if (activePrinterId === id) {
       activePrinterId = list.length > 0 ? list[0].id : ""
-      resetStatus("")
       webcams = activePrinterId ? (Model.findPrinter(list, activePrinterId).webcams || []) : []
-      statusProcess.running = false
-      webcamsProcess.running = false
     }
     persistPrinters()
-    if (activePrinterId) {
-      refresh()
-      fetchWebcams()
-    }
+    if (activePrinterId) fetchWebcams()
   }
 
   function setActivePrinter(id) {
     if (id === activePrinterId || !Model.findPrinter(printers, id)) return
     activePrinterId = id
-    statusProcess.running = false
-    webcamsProcess.running = false
-    resetStatus("")
     // Seed from this printer's own cached camera list (persisted by
     // pinWebcams) rather than clearing to [] — reserves the right amount of
     // popup space immediately instead of the layout jumping once the fresh
-    // (slow, 60s) fetch below completes.
+    // (slow, 60s) fetch below completes. Status itself needs no such
+    // seeding/refresh kick — the printer already has its own persistent
+    // connection live in the background, so switching is just re-pointing
+    // which one the UI reads from.
     webcams = Model.findPrinter(printers, id).webcams || []
-    schemeGuess = "http"
-    _triedFallbackScheme = false
     persistPrinters()
-    refresh()
     // webcamsTimer's `running` binding stays true across a printer switch
     // (activePrinter never goes null), so triggeredOnStart never re-fires —
     // fetch explicitly instead of waiting up to 60s for the next slow tick.
     fetchWebcams()
   }
 
-  // Records the scheme that just answered so future polls skip probing.
+  // Records the scheme a PrinterConnection just discovered works, so it
+  // (and the HTTP-based webcam/action calls) never have to probe again.
   function pinPrinterScheme(id, scheme) {
     var list = printers.slice()
     for (var i = 0; i < list.length; i++) {
@@ -533,7 +428,7 @@ Item {
     activePrinterId = parsed.activePrinterId
     var current = Model.findPrinter(printers, activePrinterId)
     webcams = current ? (current.webcams || []) : []
-    refresh()
+    fetchWebcams()
   }
 
   Process {
