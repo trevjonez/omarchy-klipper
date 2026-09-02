@@ -148,6 +148,69 @@ function apiKeyHeaderArgs(printer) {
   return printer.apiKey ? ["-H", "X-Api-Key: " + printer.apiKey] : [];
 }
 
+// ---------------------------------------------------------------- webcams
+
+// Moonraker's stream_url/snapshot_url are relative to the web UI's own host
+// (crowsnest/nginx on the default web port), NOT Moonraker's own port —
+// verified against a real install (stream/snapshot both 200 at
+// http://<host>/webcam/..., refused on Moonraker's :7125). So this
+// deliberately has no port, unlike baseUrl().
+function mediaBaseUrl(printer, scheme) {
+  return effectiveScheme(printer, scheme) + "://" + printer.host;
+}
+
+function webcamsUrl(printer, scheme) {
+  return baseUrl(printer, scheme) + "/server/webcams/list";
+}
+
+// A config can store an already-absolute URL (e.g. a camera on a different
+// host); only relative paths get joined to mediaBaseUrl.
+function resolveWebcamUrl(printer, urlValue, scheme) {
+  var value = trimmed(urlValue);
+  if (value === "") return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.charAt(0) !== "/") value = "/" + value;
+  return mediaBaseUrl(printer, scheme) + value;
+}
+
+// Never throws: older Moonraker without this endpoint, or a printer with no
+// cameras configured, both just mean "show nothing" rather than an error.
+function parseWebcamsResponse(raw, printer, scheme) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    var list = data && data.result && data.result.webcams;
+    if (!Array.isArray(list)) return [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var cam = list[i];
+      if (!isPlainObject(cam) || cam.enabled === false) continue;
+      var streamUrl = resolveWebcamUrl(printer, cam.stream_url, scheme);
+      if (!streamUrl) continue;
+      out.push({
+        name: trimmed(cam.name) || "Camera",
+        streamUrl: streamUrl,
+        snapshotUrl: resolveWebcamUrl(printer, cam.snapshot_url, scheme),
+        flipHorizontal: cam.flip_horizontal === true,
+        flipVertical: cam.flip_vertical === true,
+        rotation: [0, 90, 180, 270].indexOf(cam.rotation) !== -1 ? cam.rotation : 0,
+        aspectRatio: parseAspectRatio(cam.aspect_ratio)
+      });
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
+// "4:3" -> 0.75 (height/width). Falls back to a plain 4:3 guess.
+function parseAspectRatio(value) {
+  var match = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(trimmed(value));
+  if (!match) return 0.75;
+  var w = parseFloat(match[1]);
+  var h = parseFloat(match[2]);
+  return w > 0 && h > 0 ? h / w : 0.75;
+}
+
 // ---------------------------------------------------------------- status
 
 var BUSY_STATES = { printing: true, paused: true };
@@ -307,6 +370,11 @@ if (typeof module !== "undefined") {
     actionUrl: actionUrl,
     gcodeActionUrl: gcodeActionUrl,
     apiKeyHeaderArgs: apiKeyHeaderArgs,
+    mediaBaseUrl: mediaBaseUrl,
+    webcamsUrl: webcamsUrl,
+    resolveWebcamUrl: resolveWebcamUrl,
+    parseWebcamsResponse: parseWebcamsResponse,
+    parseAspectRatio: parseAspectRatio,
     parseStatusResponse: parseStatusResponse,
     parseInfoResponse: parseInfoResponse,
     stateLabel: stateLabel,

@@ -29,6 +29,9 @@ Item {
   property var bed: ({ actual: null, target: null })
   property bool refreshing: false
   property string lastError: ""
+  // Enabled cameras for the active printer, from /server/webcams/list.
+  // Refreshed far less often than status — cameras essentially never change.
+  property var webcams: []
 
   // ---- action feedback ------------------------------------------------------
   property string actionStatus: ""
@@ -156,6 +159,42 @@ Item {
     running: root.activePrinter !== null
     triggeredOnStart: true
     onTriggered: root.refresh()
+  }
+
+  // ---------------------------------------------------------------- webcams
+
+  function fetchWebcams() {
+    if (!activePrinter || webcamsProcess.running) return
+    webcamsProcess.command = ["curl", "-fsS", "--max-time", "4"]
+      .concat(Model.apiKeyHeaderArgs(activePrinter))
+      .concat([Model.webcamsUrl(activePrinter, activeScheme())])
+    webcamsProcess.running = true
+  }
+
+  Timer {
+    // Cameras essentially never change, so this polls far slower than status.
+    id: webcamsTimer
+    interval: 60000
+    repeat: true
+    running: root.activePrinter !== null
+    triggeredOnStart: true
+    onTriggered: root.fetchWebcams()
+  }
+
+  Process {
+    id: webcamsProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: webcamsStdout; waitForEnd: true }
+    stderr: StdioCollector { id: webcamsStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var stdout = String(webcamsStdout.text || "")
+      // A failed request or an older Moonraker without this endpoint both
+      // just mean "no cameras" — never surfaced as an error.
+      root.webcams = (exitCode === 0 && stdout !== "")
+        ? Model.parseWebcamsResponse(stdout, root.activePrinter, root.activeScheme())
+        : []
+    }
   }
 
   Timer {
@@ -343,6 +382,7 @@ Item {
     if (activePrinterId === id) {
       activePrinterId = list.length > 0 ? list[0].id : ""
       resetStatus("")
+      webcams = []
       statusProcess.running = false
     }
     persistPrinters()
@@ -354,6 +394,7 @@ Item {
     activePrinterId = id
     statusProcess.running = false
     resetStatus("")
+    webcams = []
     schemeGuess = "http"
     _triedFallbackScheme = false
     persistPrinters()

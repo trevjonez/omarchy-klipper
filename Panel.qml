@@ -380,6 +380,30 @@ Panel {
               }
             }
 
+            Column {
+              visible: printer.webcams.length > 0
+              width: parent.width
+              spacing: Style.space(8)
+
+              Repeater {
+                model: printer.webcams
+
+                CameraView {
+                  required property var modelData
+                  width: parent.width
+                  cameraName: printer.webcams.length > 1 ? modelData.name : ""
+                  streamUrl: modelData.streamUrl
+                  snapshotUrl: modelData.snapshotUrl
+                  flipHorizontal: modelData.flipHorizontal
+                  flipVertical: modelData.flipVertical
+                  rotationDeg: modelData.rotation
+                  aspectRatio: modelData.aspectRatio
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                }
+              }
+            }
+
             Text {
               visible: printer.actionStatus !== ""
               text: printer.actionStatus
