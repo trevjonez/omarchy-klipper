@@ -52,6 +52,14 @@ Item {
   // sweep for what landed while the shell was down.
   readonly property int _maxCatchUp: 50
 
+  // Device id of the watched directory when the current inotifywait started.
+  // On an autofs/network share the mount is dropped when idle and recreated on
+  // next access; the watches inotifywait holds belong to the *old* mount and
+  // are silently dead afterwards. The process keeps running and reports
+  // nothing, so this is checked periodically and the watcher restarted.
+  property string _watchDevice: ""
+  property int _lastSweepEpoch: 0
+
   onEnabledChanged: {
     if (enabled) startWatching()
     else stopWatching()
@@ -62,6 +70,10 @@ Item {
     syncWatchProcess()
   }
   on_BackoffChanged: syncWatchProcess()
+  // Without this an inotifywait outlives the shell that started it and is
+  // reparented to systemd, leaving duplicate watchers on every reload.
+  Component.onDestruction: watchProcess.running = false
+
   Component.onCompleted: {
     // stopWatching() rather than leaving the property default, so the idle
     // status distinguishes "no folder configured" from "configured but off".
@@ -75,7 +87,14 @@ Item {
     failed = false
     status = "Starting…"
     if (settings.lastSeenEpoch > 0) runCatchUp()
-    else markSeenNow()
+    else { beginObserving(); commitSeenMark() }
+  }
+
+  function statusIdle() {
+    if (watchDir === "") return "No folder set"
+    if (_lastSweepEpoch === 0) return "Watching " + watchDir
+    return "Watching " + watchDir + " · last checked "
+      + Qt.formatDateTime(new Date(_lastSweepEpoch * 1000), "hh:mm")
   }
 
   function stopWatching() {
@@ -85,8 +104,67 @@ Item {
     status = watchDir === "" ? "No folder set" : "Not watching"
   }
 
-  function markSeenNow() {
-    if (service) service.setAppSettings({ lastSeenEpoch: Math.floor(Date.now() / 1000) })
+  // Timestamp captured when the current batch started being observed. Marking
+  // "seen" with the time the batch *finished* would skip anything written
+  // while the scans were running, because the next sweep looks for files newer
+  // than the mark.
+  property int _observedAt: 0
+
+  function beginObserving() {
+    if (_observedAt === 0) _observedAt = Math.floor(Date.now() / 1000)
+  }
+
+  function commitSeenMark() {
+    var mark = _observedAt !== 0 ? _observedAt : Math.floor(Date.now() / 1000)
+    _observedAt = 0
+    if (service) service.setAppSettings({ lastSeenEpoch: mark })
+  }
+
+  // ---------------------------------------------------------------- reconcile
+
+  // inotify is the fast path, not the only one. It cannot see a write made
+  // from another machine on the same share, and its watches die silently when
+  // an autofs mount is recycled underneath it. A periodic sweep for files
+  // newer than the last mark closes both gaps, and re-arms the watcher if the
+  // mount changed.
+  function reconcile() {
+    if (!enabled || deviceProcess.running || catchUpProcess.running) return
+    deviceProcess.command = ["stat", "-c", "%d", watchDir]
+    deviceProcess.running = true
+  }
+
+  Process {
+    id: deviceProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: deviceStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        // Directory has gone away entirely (share unmounted and not
+        // remounting, or deleted). Say so rather than claiming to watch it.
+        root.failed = true
+        root.status = "Cannot reach " + root.watchDir
+        return
+      }
+      var device = String(deviceStdout.text || "").trim()
+      if (root._watchDevice !== "" && device !== root._watchDevice) {
+        // The share was remounted: whatever inotifywait is holding is stale.
+        root._watchDevice = device
+        root.restartWatchProcess()
+      } else if (root._watchDevice === "") {
+        root._watchDevice = device
+      }
+      root.failed = false
+      root.runCatchUp()
+    }
+  }
+
+  Timer {
+    id: reconcileTimer
+    interval: 120000
+    repeat: true
+    running: root.enabled
+    onTriggered: root.reconcile()
   }
 
   // ---------------------------------------------------------------- discovery
@@ -94,6 +172,7 @@ Item {
   function noteFile(absPath) {
     var rel = Model.relativeGcodePath(watchDir, absPath)
     if (!rel) return
+    beginObserving()
     var pending = _pending
     pending[rel] = true
     _pending = pending
@@ -193,8 +272,8 @@ Item {
       _fileState = stateMap
     }
     if (_queue.length === 0 && _current === null) {
-      markSeenNow()
-      status = "Watching " + watchDir
+      commitSeenMark()
+      status = statusIdle()
     }
     drain()
   }
@@ -249,6 +328,11 @@ Item {
   // asynchronously (FileView loading printers.json at startup) QML is free to
   // re-evaluate `running` before `command`. That started inotifywait with the
   // previous, empty directory — "No files specified to watch!".
+  function restartWatchProcess() {
+    watchProcess.running = false
+    Qt.callLater(function() { root.syncWatchProcess() })
+  }
+
   function syncWatchProcess() {
     watchProcess.running = false
     if (!enabled || _backoff) return
@@ -270,7 +354,7 @@ Item {
     stderr: StdioCollector { id: watchStderr; waitForEnd: true }
     onStarted: {
       root.failed = false
-      if (root._queue.length === 0) root.status = "Watching " + root.watchDir
+      if (root._queue.length === 0) root.status = root.statusIdle()
     }
     onExited: {
       // inotifywait only exits on its own if it couldn't watch — an unmounted
@@ -295,6 +379,7 @@ Item {
 
   function runCatchUp() {
     if (catchUpProcess.running) return
+    beginObserving()
     catchUpProcess.command = Model.catchUpArgs(watchDir, settings.lastSeenEpoch)
     catchUpProcess.running = true
   }
@@ -305,14 +390,15 @@ Item {
     command: []
     stdout: StdioCollector { id: catchUpStdout; waitForEnd: true }
     onExited: function(exitCode) {
-      if (exitCode !== 0) { root.markSeenNow(); return }
+      if (exitCode !== 0) { root.commitSeenMark(); return }
+      root._lastSweepEpoch = Math.floor(Date.now() / 1000)
       var lines = String(catchUpStdout.text || "").split("\n")
       var files = []
       for (var i = 0; i < lines.length; i++) {
         var rel = Model.relativeGcodePath(root.watchDir, lines[i])
         if (rel) files.push(rel)
       }
-      if (files.length === 0) { root.markSeenNow(); return }
+      if (files.length === 0) { root.commitSeenMark(); root.status = root.statusIdle(); return }
       // Cap rather than let a clock jump or a bulk copy enqueue hundreds of
       // multi-second parses; say so instead of silently truncating.
       if (files.length > root._maxCatchUp) {
