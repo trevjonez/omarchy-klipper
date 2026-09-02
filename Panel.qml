@@ -26,9 +26,12 @@ Panel {
     return foreground
   }
 
-  property bool managingPrinters: false
   property bool addingPrinter: false
   property string editingPrinterId: ""
+  // "Remove printer" in the edit form is armed by one press, run by a
+  // second — same double-press-to-confirm convention Service.qml already
+  // uses for cancel/e-stop.
+  property bool confirmRemovePrinter: false
   property int switcherIndex: 0
   // Keyboard-cursor highlight only appears once the keyboard is actually
   // used — same convention as the Network plugin's cursorActive. Without
@@ -85,9 +88,9 @@ Panel {
   }
 
   function startAddPrinter() {
-    managingPrinters = false
     addingPrinter = true
     editingPrinterId = ""
+    confirmRemovePrinter = false
     printer.resetTestState()
     editingSensorSelection = []
     Qt.callLater(function() {
@@ -103,6 +106,7 @@ Panel {
     if (!p) return
     addingPrinter = true
     editingPrinterId = p.id
+    confirmRemovePrinter = false
     printer.resetTestState()
     editingSensorSelection = (p.displaySensors || []).slice()
     // No live connection exists yet for a printer that doesn't exist until
@@ -121,10 +125,19 @@ Panel {
   function cancelEditPrinter() {
     addingPrinter = false
     editingPrinterId = ""
+    confirmRemovePrinter = false
     printer.resetTestState()
     printer.clearEditDiscovery()
     editingSensorSelection = []
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  function requestRemovePrinter() {
+    if (editingPrinterId === "") return
+    if (!confirmRemovePrinter) { confirmRemovePrinter = true; return }
+    var id = editingPrinterId
+    cancelEditPrinter()
+    printer.removePrinter(id)
   }
 
   function currentFormFields() {
@@ -235,10 +248,9 @@ Panel {
           rightPadding: Style.space(16)
 
           // ---- printer switcher ----
-          // Shown for a single configured printer too — otherwise there is
-          // no row to hang Edit/Remove off of once "Manage printers" is on.
+          // Always shown, even with zero printers — "+ Add printer" lives as
+          // the list's own trailing row now rather than a separate footer.
           Column {
-            visible: printer.printers.length > 0
             width: parent.width - parent.leftPadding - parent.rightPadding
             spacing: Style.space(4)
 
@@ -284,35 +296,79 @@ Panel {
                   }
                 }
 
-                Row {
-                  visible: root.managingPrinters
+                GearIcon {
+                  id: gearButton
                   anchors.right: parent.right
                   anchors.rightMargin: Style.space(10)
                   anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(10)
+                  color: gearArea.containsMouse ? root.foreground : root.dim
 
-                  Text {
-                    text: "Edit"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.startEditPrinter(switcherRow.modelData) }
-                  }
-                  Text {
-                    text: "Remove"
-                    color: Color.urgent
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: printer.removePrinter(switcherRow.modelData.id) }
+                  MouseArea {
+                    id: gearArea
+                    // Larger than the icon itself — a comfortable click
+                    // target without changing the icon's own visual size.
+                    anchors.centerIn: parent
+                    width: parent.width + Style.space(12)
+                    height: parent.height + Style.space(12)
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.startEditPrinter(switcherRow.modelData)
                   }
                 }
 
                 MouseArea {
+                  // Stops short of the gear's own (slightly larger) click
+                  // target so the two hit regions never overlap — no click
+                  // on the gear can also switch the active printer.
                   anchors.fill: parent
-                  visible: !root.managingPrinters
+                  anchors.rightMargin: gearButton.width + Style.space(20)
                   cursorShape: Qt.PointingHandCursor
                   onClicked: printer.setActivePrinter(switcherRow.modelData.id)
                 }
+              }
+            }
+
+            Item {
+              id: addPrinterRow
+              width: parent.width
+              height: addPrinterContent.implicitHeight + Style.spacing.rowPaddingX
+
+              Rectangle {
+                anchors.fill: parent
+                radius: Style.cornerRadius
+                color: addPrinterArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
+              }
+
+              Row {
+                id: addPrinterContent
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(8)
+
+                Text {
+                  text: "+"
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  font.bold: true
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+                Text {
+                  text: "Add printer"
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              MouseArea {
+                id: addPrinterArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.startAddPrinter()
               }
             }
           }
@@ -721,28 +777,12 @@ Panel {
               KlipperButton { buttonText: printer.testing ? "Testing…" : "Test"; onClicked: root.testCurrentForm() }
               KlipperButton { buttonText: root.editingPrinterId !== "" ? "Save" : "Add"; onClicked: root.commitPrinterForm() }
               KlipperButton { buttonText: "Cancel"; onClicked: root.cancelEditPrinter() }
-            }
-          }
-
-          // ---- footer actions ----
-          Row {
-            visible: !root.addingPrinter
-            spacing: Style.space(16)
-
-            Text {
-              text: "+ Add printer"
-              color: Color.accent
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.startAddPrinter() }
-            }
-            Text {
-              visible: printer.printers.length > 0
-              text: root.managingPrinters ? "Done managing" : "Manage printers"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.managingPrinters = !root.managingPrinters }
+              KlipperButton {
+                visible: root.editingPrinterId !== ""
+                buttonText: root.confirmRemovePrinter ? "Confirm remove" : "Remove printer"
+                urgent: true
+                onClicked: root.requestRemovePrinter()
+              }
             }
           }
         }
@@ -778,6 +818,50 @@ Panel {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: btn.clicked()
+    }
+  }
+
+  // Custom-drawn (not a font glyph) for the same reason PrinterIcon.qml is:
+  // guaranteed to render identically everywhere, no tofu risk on a theme
+  // font that happens not to carry a gear character. Two overlapping
+  // squares (one plain, one rotated 45°) make an 8-pointed star; a circle
+  // sized to cover their flat edges but not their corners leaves exactly
+  // those 8 corners poking out as teeth, plus a small hole punched through
+  // the middle in the popup's own background color.
+  component GearIcon: Item {
+    id: gear
+    property color color: root.dim
+    implicitWidth: Style.space(16)
+    implicitHeight: Style.space(16)
+    width: implicitWidth
+    height: implicitHeight
+
+    Rectangle {
+      anchors.centerIn: parent
+      width: parent.width * 0.62
+      height: width
+      color: gear.color
+    }
+    Rectangle {
+      anchors.centerIn: parent
+      width: parent.width * 0.62
+      height: width
+      rotation: 45
+      color: gear.color
+    }
+    Rectangle {
+      anchors.centerIn: parent
+      width: parent.width * 0.68
+      height: width
+      radius: width / 2
+      color: gear.color
+    }
+    Rectangle {
+      anchors.centerIn: parent
+      width: parent.width * 0.28
+      height: width
+      radius: width / 2
+      color: Color.popups.background
     }
   }
 }
