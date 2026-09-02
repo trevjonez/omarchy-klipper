@@ -38,5 +38,22 @@ ui_ipc openSettings; sleep 0.4
 ui_ipc close; sleep 1
 ui_assert_layers 0 "rapid open/switch/close leaves nothing stuck open" || rc=1
 
+# The camera wall and the fullscreen feed are their own layer surfaces, so a
+# real shell can be checked for stacking: only ever one of them mapped.
+ui_ipc cameras; sleep 1.5
+ui_assert_count 1 "$(ui_wall_layers)" "camera wall opens" || rc=1
+ui_assert_count 0 "$(ui_panel_layers)" "camera wall is not a popup surface" || rc=1
+
+ui_ipc open; sleep 1.5
+ui_assert_count 0 "$(ui_wall_layers)" "opening the popup dismisses the wall" || rc=1
+ui_assert_count 1 "$(ui_panel_layers)" "printer popup is showing instead" || rc=1
+
+ui_ipc cameras; sleep 1
+ui_ipc closeCameras; sleep 1.5
+ui_assert_count 0 "$(ui_wall_layers)" "camera wall closes" || rc=1
+
+ui_ipc close; sleep 1
+ui_assert_count 0 "$(ui_panel_layers)" "nothing left showing" || rc=1
+
 [[ $rc -ne 0 ]] && ui_shot failure
 exit $rc

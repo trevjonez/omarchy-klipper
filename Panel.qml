@@ -59,21 +59,25 @@ Panel {
   // All-cameras wall, on right-click.
   property bool cameraWallOpen: false
 
-  function openCameraWall() {
+  // Only one of the four views is ever showing. Every entry point clears the
+  // rest through here rather than each remembering the others, which is how
+  // left-click came to leave the camera wall stacked behind the popup.
+  function dismissAllViews() {
     close()
     settingsOpen = false
+    cameraWallOpen = false
     fullscreenPrinterId = ""
+  }
+
+  function openCameraWall() {
+    dismissAllViews()
     cameraWallOpen = true
   }
 
   function openFullscreenCamera(printerId, index) {
-    fullscreenPrinterId = printerId
+    dismissAllViews()
     fullscreenWebcamIndex = index
-    cameraWallOpen = false
-    // The popup is an overlay surface holding the keyboard; leaving it up
-    // behind a fullscreen feed just fights over focus.
-    close()
-    settingsOpen = false
+    fullscreenPrinterId = printerId
   }
 
   function selectedSwitcherPrinter() {
@@ -245,20 +249,26 @@ Panel {
 
   BarIconButton {
     id: button
+    objectName: "barPill"
     bar: root.bar
     iconComponent: iconComp
     tooltipText: printer.activePrinter ? (printer.printerName + " — " + printer.stateLabel()) : "Klipper — no printer configured"
 
     onPressed: function(b) {
+      // Each button toggles its own view and dismisses the others, so the
+      // pill always lands on exactly one thing showing or nothing.
       if (b === Qt.MiddleButton) {
-        root.close()
-        root.settingsOpen = !root.settingsOpen
+        var settingsWereOpen = root.settingsOpen
+        root.dismissAllViews()
+        root.settingsOpen = !settingsWereOpen
       } else if (b === Qt.RightButton) {
-        if (root.cameraWallOpen) root.cameraWallOpen = false
-        else root.openCameraWall()
+        var wallWasOpen = root.cameraWallOpen
+        root.dismissAllViews()
+        root.cameraWallOpen = !wallWasOpen
       } else {
-        root.settingsOpen = false
-        root.toggle()
+        var popupWasOpen = root.opened
+        root.dismissAllViews()
+        if (!popupWasOpen) root.open()
       }
     }
   }
@@ -1010,13 +1020,28 @@ Panel {
   IpcHandler {
     target: root.ipcTarget
 
-    function open(): void { root.settingsOpen = false; root.open() }
-    function close(): void { root.settingsOpen = false; root.close() }
+    // These go through dismissAllViews for the same reason the mouse buttons
+    // do: only one view is ever showing, and an entry point that clears only
+    // the views it happens to know about leaves the others stacked behind it.
+    function open(): void { root.dismissAllViews(); root.open() }
+    function close(): void { root.dismissAllViews() }
     function show(): void { open() }
     function hide(): void { close() }
-    function toggle(): void { root.settingsOpen = false; root.toggle() }
+    function toggle(): void {
+      var wasOpen = root.opened
+      root.dismissAllViews()
+      if (!wasOpen) root.open()
+    }
 
-    function openSettings(): void { root.close(); root.settingsOpen = true }
+    function openSettings(): void { root.dismissAllViews(); root.settingsOpen = true }
+    // Deliberately not dismissAllViews: this closes the settings popup only,
+    // which is what makes it usable as "close that specific popup".
+    function closeSettings(): void { root.settingsOpen = false }
+    function toggleSettings(): void {
+      var wasOpen = root.settingsOpen
+      root.dismissAllViews()
+      root.settingsOpen = !wasOpen
+    }
 
     // Fullscreen the active printer's first camera, so it can be bound to a
     // key rather than only reachable by clicking the feed in the popup.
@@ -1027,12 +1052,6 @@ Panel {
 
     function cameras(): void { root.openCameraWall() }
     function closeCameras(): void { root.cameraWallOpen = false }
-    function closeSettings(): void { root.settingsOpen = false }
-    function toggleSettings(): void {
-      if (root.settingsOpen) { root.settingsOpen = false; return }
-      root.close()
-      root.settingsOpen = true
-    }
   }
 
   KeyboardPanel {

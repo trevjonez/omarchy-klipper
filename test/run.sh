@@ -4,7 +4,7 @@
 #   ./test/run.sh              unit + qml (the default suite)
 #   ./test/run.sh --unit       Model.js only; needs nothing but node
 #   ./test/run.sh --qml        integration only; needs a Wayland session
-#   ./test/run.sh --ui         popup tests in a nested shell (ydotool optional)
+#   ./test/run.sh --ui         popup/window tests in a nested shell
 #   ./test/run.sh --lint       qmllint + omarchy-plugin-validate
 #   ./test/run.sh --all        everything
 #
@@ -181,12 +181,10 @@ fi
 
 if [[ $RUN_UI -eq 1 ]]; then
   section "ui (nested shell)"
-  # No tier-level gate on ydotool: only the synthetic-input test needs it, and
-  # it skips itself. The rest drive the shell over IPC and always run.
-  if ! command -v ydotool >/dev/null; then
-    echo "     note: ydotool absent, synthetic-input tests will skip"
-    echo "           (install with: omarchy dev install ydoo)"
-  fi
+  # Every test here drives the shell over IPC, so nothing needs ydotool or the
+  # system-wide uinput rule it requires. Mouse-button dispatch on the bar pill
+  # is covered in the qml tier by tst_barbuttons, which calls the same
+  # triggerPress() the pill's own MouseArea calls.
   for t in test/ui/tst_*.sh; do
     [[ -e "$t" ]] || continue
     if bash "$t"; then pass "$(basename "$t" .sh)"; else fail "$(basename "$t" .sh)"; fi

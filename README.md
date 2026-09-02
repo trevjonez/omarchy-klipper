@@ -149,10 +149,10 @@ had seen the write.
   layout: buttons wrap instead of overhanging at any width, and content
   becomes scrollable when the screen is too short for it. Layout is computed
   even where nothing rasterises, so this works headlessly.
-- **ui** — popup lifecycle against a second Omarchy shell running in a
-  nested compositor with its own `HOME`, so it never touches your real bar
-  or config. Synthetic-input tests need `ydotool`
-  (`omarchy dev install ydoo`) and skip cleanly without it.
+- **ui** — popup and window lifecycle against a second Omarchy shell running
+  in a nested compositor with its own `HOME`, so it never touches your real
+  bar or config. Everything is driven over IPC; no synthetic input, and
+  nothing to install.
 
 The mock has no dependencies — there is no `package.json` and nothing to
 install. The qml and ui tiers need a Wayland session; without one the runner
