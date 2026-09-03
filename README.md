@@ -173,9 +173,21 @@ had seen the write.
   nothing to install.
 
 The mock has no dependencies — there is no `package.json` and nothing to
-install. The qml and ui tiers need a Wayland session; without one the runner
-starts a headless compositor, which requires `cage` (`sudo pacman -S cage`),
-since Hyprland cannot start headlessly on its Aquamarine backend.
+install, and the unit tier needs no display at all.
+
+The qml tier maps real layer-shell surfaces, which take keyboard focus as they
+map, so it should not run against your own session. Install `sway`
+(`sudo pacman -S sway`) and the runner uses its headless backend: a virtual
+output your desktop never sees. Without sway it falls back to the current
+session and says so — that works, but can swallow a keystroke.
+
+`cage` looks like it would do instead and does not: it is a kiosk compositor
+with no `wlr-layer-shell`, so every panel collapses to a 500x500 window.
+
+The single `ui` test is a deliberate exception — it reads mapped layer
+surfaces via `hyprctl`, which sway has no equivalent for, and Hyprland cannot
+nest inside sway (it needs `xdg_wm_base` <= 5; sway advertises 6). So that one
+runs on the session's Hyprland and announces it.
 
 ## Uninstall
 

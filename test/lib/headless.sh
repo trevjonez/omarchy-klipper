@@ -16,21 +16,27 @@
 # cage is deliberately NOT used despite also having a headless backend: it is a
 # kiosk compositor and does not implement wlr-layer-shell. qs reports "Failed
 # to initialize layershell integration" and every panel falls back to a 500x500
-# floating window, so the popup and fullscreen tests fail with geometry that
+# floating window, so the popup and fullscreen tests fail on geometry that
 # means nothing. Do not add it back as a fallback.
-#
-# Nesting a compositor inside the session was tried and rejected: Hyprland's
-# Wayland backend maps a real window, which blacks out the screen for the
-# length of the run. It remains available via TEST_NESTED=1.
 #
 # Hyprland cannot provide (1) at all: since 0.4x it uses Aquamarine rather than
 # wlroots, WLR_BACKENDS is ignored, and with no seat to attach to it aborts
-# with "CBackend::create() failed!" (verified on 0.56.2).
+# with "CBackend::create() failed!" (verified on 0.56.2). It also cannot nest
+# inside sway -- Hyprland 0.56 requires xdg_wm_base <= 5 and sway 1.12
+# advertises 6 -- so the ui tier, which needs `hyprctl`, steps back onto the
+# session's own Hyprland instead. See test/ui/lib.sh.
 
 HEADLESS_PID=""
-# Set when this script started the compositor, so the ui tier can reuse it
-# instead of nesting a third one inside it.
-export TEST_OWNED_DISPLAY=0
+
+# The developer's own display, remembered before we swap in a headless one, so
+# the ui tier can step back onto it (see test/ui/lib.sh).
+export TEST_SESSION_DISPLAY="${WAYLAND_DISPLAY:-}"
+
+# Which compositor this script started. The ui tier needs Hyprland
+# specifically -- its assertions read mapped layer surfaces through
+# `hyprctl layers`, and sway exposes no equivalent -- so it can only reuse this
+# display when it is a Hyprland one.
+export TEST_OWNED_KIND=""
 export TEST_OWNED_HIS=""
 
 _headless_teardown() {
@@ -38,23 +44,20 @@ _headless_teardown() {
     kill "$HEADLESS_PID" 2>/dev/null
     wait "$HEADLESS_PID" 2>/dev/null
     HEADLESS_PID=""
-# Set when this script started the compositor, so the ui tier can reuse it
-# instead of nesting a third one inside it.
-export TEST_OWNED_DISPLAY=0
-export TEST_OWNED_HIS=""
   fi
 }
 
 # Watches the runtime dir for a wayland socket that wasn't there before.
 _await_new_socket() {
-  local before="$1" runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" logfile="$2"
-  for _ in $(seq 1 150); do
+  local before="$1" logfile="$2"
+  local runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local i now candidate
+  for i in $(seq 1 150); do
     if ! kill -0 "$HEADLESS_PID" 2>/dev/null; then
       echo "compositor exited immediately:" >&2
       tail -15 "$logfile" >&2
       return 1
     fi
-    local now candidate
     now="$(ls "$runtime" 2>/dev/null | grep -E '^wayland-[0-9]+$' | sort)"
     candidate="$(comm -13 <(echo "$before") <(echo "$now") | head -1)"
     if [[ -n "$candidate" ]]; then
@@ -68,12 +71,28 @@ _await_new_socket() {
   return 1
 }
 
+# Hyprland's instance signature, so `hyprctl` addresses the instance we just
+# started rather than the developer's live session.
+_await_hyprland_signature() {
+  local before="$1"
+  local runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local i now
+  for i in $(seq 1 50); do
+    now="$(ls "$runtime/hypr" 2>/dev/null | sort)"
+    TEST_OWNED_HIS="$(comm -13 <(echo "$before") <(echo "$now") | head -1)"
+    [[ -n "$TEST_OWNED_HIS" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 _start_compositor() {
-  local kind="$1" conf logdir before runtime
+  local kind="$1" conf logdir before his_before runtime
   conf="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hyprland-headless.conf"
   logdir="$(mktemp -d)"
   runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   before="$(ls "$runtime" 2>/dev/null | grep -E '^wayland-[0-9]+$' | sort)"
+  his_before="$(ls "$runtime/hypr" 2>/dev/null | sort)"
 
   trap _headless_teardown EXIT
   case "$kind" in
@@ -86,18 +105,19 @@ _start_compositor() {
       WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER_ALLOW_SOFTWARE=1 \
         sway -c /dev/null >"$logdir/comp.log" 2>&1 &
       ;;
+    *)
+      echo "unknown compositor kind: $kind" >&2
+      return 1
+      ;;
   esac
   HEADLESS_PID=$!
   _await_new_socket "$before" "$logdir/comp.log" || return 1
-  TEST_OWNED_DISPLAY=1
-  local i his_now
-  for i in $(seq 1 50); do
-    his_now="$(ls "$runtime/hypr" 2>/dev/null | sort)"
-    TEST_OWNED_HIS="$(comm -13 <(echo "$his_before") <(echo "$his_now") | head -1)"
-    [[ -n "$TEST_OWNED_HIS" ]] && break
-    sleep 0.1
-  done
+
+  TEST_OWNED_KIND="$kind"
+  [[ "$kind" == "nested-hyprland" ]] && _await_hyprland_signature "$his_before"
+
   echo "started $kind on $WAYLAND_DISPLAY (pid $HEADLESS_PID)"
+  return 0
 }
 
 ensure_display() {
@@ -128,7 +148,7 @@ No Wayland session, and no compositor available to start one.
   qs needs a display, and Hyprland cannot provide one headlessly: since it
   moved to Aquamarine it ignores WLR_BACKENDS and aborts without a seat.
 
-  Install a headless-capable compositor to run this tier over SSH or in CI:
+  Install a headless-capable compositor that implements layer-shell:
 
       sudo pacman -S sway
 

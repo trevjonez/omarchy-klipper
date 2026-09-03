@@ -76,10 +76,29 @@ ui_start() {
   ui_build_stage
   trap ui_stop EXIT
 
-  # The runner already put us in a nested, empty compositor so the tests'
-  # exclusive-keyboard surfaces cannot reach the real session. Reuse it rather
-  # than nesting a third compositor inside it.
-  if [[ "${TEST_OWNED_DISPLAY:-0}" == "1" && -n "${TEST_OWNED_HIS:-}" ]]; then
+  # This tier needs a Hyprland display: its assertions read mapped layer
+  # surfaces through `hyprctl layers`, and sway exposes no equivalent.
+  #
+  # It also cannot get one by nesting inside the runner's sway -- Hyprland 0.56
+  # requires xdg_wm_base <= 5 and sway 1.12 advertises 6, so it aborts with
+  # "CBackend::create() failed!". So when the runner is on sway, this tier
+  # steps back onto the session's own Hyprland.
+  #
+  # That is a deliberate, contained exception to running everything headless:
+  # it is one short test that opens two popups, versus the qml tier's fifteen.
+  if [[ "${TEST_OWNED_KIND:-}" != "nested-hyprland" && -n "${TEST_SESSION_DISPLAY:-}" ]]; then
+    if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+      ui_log "using the session's Hyprland (sway cannot host this tier)"
+      UI_DISPLAY="$TEST_SESSION_DISPLAY"
+      UI_HIS="$HYPRLAND_INSTANCE_SIGNATURE"
+      ui_start_shell
+      return $?
+    fi
+    ui_log "SKIP: this tier needs a Hyprland display and none is available"
+    return 2
+  fi
+
+  if [[ "${TEST_OWNED_KIND:-}" == "nested-hyprland" && -n "${TEST_OWNED_HIS:-}" ]]; then
     UI_DISPLAY="$WAYLAND_DISPLAY"
     UI_HIS="$TEST_OWNED_HIS"
     ui_start_shell

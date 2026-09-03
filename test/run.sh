@@ -187,7 +187,12 @@ if [[ $RUN_UI -eq 1 ]]; then
   # triggerPress() the pill's own MouseArea calls.
   for t in test/ui/tst_*.sh; do
     [[ -e "$t" ]] || continue
-    if bash "$t"; then pass "$(basename "$t" .sh)"; else fail "$(basename "$t" .sh)"; fi
+    bash "$t"; local_rc=$?
+    case $local_rc in
+      0) pass "$(basename "$t" .sh)" ;;
+      2) printf '\033[33mskip\033[0m %s\n' "$(basename "$t" .sh)" ;;
+      *) fail "$(basename "$t" .sh)" ;;
+    esac
   done
 fi
 
