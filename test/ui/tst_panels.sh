@@ -4,7 +4,10 @@
 # input is required.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-ui_start || exit 1
+# Propagate a skip (2) rather than collapsing it into a failure.
+ui_start; start_rc=$?
+[[ $start_rc -eq 2 ]] && exit 2
+[[ $start_rc -ne 0 ]] && exit 1
 rc=0
 
 ui_ipc close; ui_ipc closeSettings; sleep 1

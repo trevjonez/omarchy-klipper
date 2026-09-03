@@ -125,14 +125,18 @@ ensure_display() {
   local have_session=0
   [[ -n "${WAYLAND_DISPLAY:-}" && -S "$runtime/${WAYLAND_DISPLAY}" ]] && have_session=1
 
-  # A headless compositor is preferred even inside a session: it is a virtual
-  # output, so the tests' layer-shell surfaces never reach the real desktop.
-  if command -v sway >/dev/null; then
-    _start_compositor sway && return 0
-  fi
-
+  # Checked before sway: TEST_NESTED=1 is an explicit request for a Hyprland
+  # display, which the ui tier needs (`hyprctl`) and sway cannot provide. It
+  # costs a blanked screen for the length of the run, which is why it is opt-in
+  # and never the default.
   if [[ $have_session -eq 1 && "${TEST_NESTED:-0}" == "1" ]]; then
     command -v Hyprland >/dev/null && _start_compositor nested-hyprland && return 0
+  fi
+
+  # Otherwise a headless compositor, preferred even inside a session: it is a
+  # virtual output, so the tests' layer-shell surfaces never reach the desktop.
+  if command -v sway >/dev/null; then
+    _start_compositor sway && return 0
   fi
 
   if [[ $have_session -eq 1 ]]; then

@@ -4,7 +4,7 @@
 #   ./test/run.sh              unit + qml (the default suite)
 #   ./test/run.sh --unit       Model.js only; needs nothing but node
 #   ./test/run.sh --qml        integration only; needs a Wayland session
-#   ./test/run.sh --ui         popup/window tests in a nested shell
+#   ./test/run.sh --ui         popup/window tests; needs TEST_NESTED=1, else skips
 #   ./test/run.sh --lint       qmllint + omarchy-plugin-validate
 #   ./test/run.sh --all        everything
 #

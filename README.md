@@ -170,10 +170,13 @@ had seen the write.
   layout: buttons wrap instead of overhanging at any width, and content
   becomes scrollable when the screen is too short for it. Layout is computed
   even where nothing rasterises, so this works headlessly.
-- **ui** — popup and window lifecycle against a second Omarchy shell running
-  in a nested compositor with its own `HOME`, so it never touches your real
-  bar or config. Everything is driven over IPC; no synthetic input, and
-  nothing to install.
+- **ui** — popup and window lifecycle against a second Omarchy shell with its
+  own `HOME`. It drives the camera wall and the fullscreen view, which are
+  full-screen layer surfaces, so it refuses to run on your session and skips
+  by default. `TEST_NESTED=1 ./test/run.sh --ui` runs it in a nested Hyprland,
+  which blanks the screen for the duration. What it uniquely covers is that
+  the plugin loads in a real shell; the behaviour it asserts is covered
+  headlessly by `tst_barbuttons` and `tst_camerawall`.
 
 The mock has no dependencies — there is no `package.json` and nothing to
 install, and the unit tier needs no display at all.

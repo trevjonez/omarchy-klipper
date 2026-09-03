@@ -46,8 +46,9 @@ ui_build_stage() {
   # the captured region and churn the goldens.
   cat > "$UI_STAGE/.config/omarchy/shell.json" <<'JSON'
 {
+  "_comment": "idle is set a day out, not 0: these are seconds since idle began, so 0 fires immediately and locks the screen",
   "version": 1,
-  "idle": { "screensaver": 0, "lock": 0 },
+  "idle": { "screensaver": 86400, "lock": 86400 },
   "bar": {
     "position": "bottom",
     "transparent": false,
@@ -76,63 +77,35 @@ ui_start() {
   ui_build_stage
   trap ui_stop EXIT
 
-  # This tier needs a Hyprland display: its assertions read mapped layer
-  # surfaces through `hyprctl layers`, and sway exposes no equivalent.
+  # This tier will NOT run against the developer's own session. It starts a
+  # second Omarchy shell and drives it through the camera wall and the
+  # fullscreen view, both of which are full-screen layer surfaces that take
+  # keyboard focus -- on a live desktop that blanks the screen mid-run. An
+  # earlier version also shipped `idle: 0` in its generated shell.json, which
+  # is "zero seconds since idle began", so it locked the screen too.
   #
-  # It also cannot get one by nesting inside the runner's sway -- Hyprland 0.56
-  # requires xdg_wm_base <= 5 and sway 1.12 advertises 6, so it aborts with
-  # "CBackend::create() failed!". So when the runner is on sway, this tier
-  # steps back onto the session's own Hyprland.
+  # It needs Hyprland specifically, because its assertions read mapped layer
+  # surfaces through `hyprctl layers` and sway exposes no equivalent. It also
+  # cannot nest Hyprland inside the runner's sway: Hyprland 0.56 requires
+  # xdg_wm_base <= 5 and sway 1.12 advertises 6, so it aborts with
+  # "CBackend::create() failed!".
   #
-  # That is a deliberate, contained exception to running everything headless:
-  # it is one short test that opens two popups, versus the qml tier's fifteen.
-  if [[ "${TEST_OWNED_KIND:-}" != "nested-hyprland" && -n "${TEST_SESSION_DISPLAY:-}" ]]; then
-    if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
-      ui_log "using the session's Hyprland (sway cannot host this tier)"
-      UI_DISPLAY="$TEST_SESSION_DISPLAY"
-      UI_HIS="$HYPRLAND_INSTANCE_SIGNATURE"
-      ui_start_shell
-      return $?
-    fi
-    ui_log "SKIP: this tier needs a Hyprland display and none is available"
+  # So it runs only when the runner has given it an isolated Hyprland
+  # (TEST_NESTED=1) and skips otherwise. What it uniquely covers -- the plugin
+  # loading in a real shell -- is worth having, but not at the cost of taking
+  # over someone's desktop. The behaviour it asserts is covered headlessly by
+  # tst_barbuttons and tst_camerawall in the qml tier.
+  if [[ "${TEST_OWNED_KIND:-}" != "nested-hyprland" || -z "${TEST_OWNED_HIS:-}" ]]; then
+    ui_log "SKIP: needs an isolated Hyprland (hyprctl); sway cannot provide one."
+    ui_log "      Re-run with TEST_NESTED=1 to get it -- that nests Hyprland in"
+    ui_log "      your session, which blanks the screen while it runs."
     return 2
   fi
 
-  if [[ "${TEST_OWNED_KIND:-}" == "nested-hyprland" && -n "${TEST_OWNED_HIS:-}" ]]; then
-    UI_DISPLAY="$WAYLAND_DISPLAY"
-    UI_HIS="$TEST_OWNED_HIS"
-    ui_start_shell
-    return $?
-  fi
-
-  local runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-  local before; before="$(ls "$runtime" | grep -E '^wayland-[0-9]+$' | sort)"
-  local his_before; his_before="$(ls "$runtime/hypr" 2>/dev/null | sort)"
-
-  Hyprland -c "$UI_ROOT/test/lib/hyprland-headless.conf" >"$UI_STAGE/comp.log" 2>&1 &
-  UI_COMP_PID=$!
-
-  local i now
-  for i in $(seq 1 150); do
-    kill -0 "$UI_COMP_PID" 2>/dev/null || { ui_log "compositor died"; tail -5 "$UI_STAGE/comp.log"; return 1; }
-    now="$(ls "$runtime" | grep -E '^wayland-[0-9]+$' | sort)"
-    UI_DISPLAY="$(comm -13 <(echo "$before") <(echo "$now") | head -1)"
-    [[ -n "$UI_DISPLAY" ]] && break
-    sleep 0.1
-  done
-  [[ -z "$UI_DISPLAY" ]] && { ui_log "nested compositor never came up"; return 1; }
-
-  # Identify the nested instance explicitly; picking the newest signature
-  # directory would be a coin flip against the developer's live session.
-  local his_now
-  for i in $(seq 1 50); do
-    his_now="$(ls "$runtime/hypr" 2>/dev/null | sort)"
-    UI_HIS="$(comm -13 <(echo "$his_before") <(echo "$his_now") | head -1)"
-    [[ -n "$UI_HIS" ]] && break
-    sleep 0.1
-  done
-
+  UI_DISPLAY="$WAYLAND_DISPLAY"
+  UI_HIS="$TEST_OWNED_HIS"
   ui_start_shell
+  return $?
 }
 
 ui_start_shell() {
