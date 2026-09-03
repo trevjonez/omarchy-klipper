@@ -38,27 +38,50 @@ ShellRoot {
 
   Process { id: sh; running: false; command: [] }
 
+  function rowFor(name) {
+    for (var i = 0; i < watcher.activity.length; i++)
+      if (watcher.activity[i].file === name) return watcher.activity[i]
+    return null
+  }
+
+  function stateOf(row, printerName) {
+    if (!row) return "none"
+    for (var i = 0; i < row.printers.length; i++)
+      if (row.printers[i].name === printerName) return row.printers[i].state
+    return "none"
+  }
+
   Component.onCompleted: {
     h.waitFor("watcher running", function() { return watcher.status.indexOf("Watching") === 0 }, function() {
       sh.command = ["bash", "-c", "printf ';g\\n' > '" + root.watchDir + "/held.gcode'"]
       sh.running = true
 
-      h.waitFor("queue reports waiting for a free printer",
-                function() { return watcher.status.indexOf("waiting for a free printer") !== -1 }, function() {
+      // The file is recorded straight away, showing the busy printer as
+      // queued. Staying silent until the scan finished was the old behaviour,
+      // and it made a deliberately held queue indistinguishable from a stuck
+      // one -- which is the whole reason this is reported per printer now.
+      h.waitFor("held work is visible immediately", function() {
+        return root.stateOf(root.rowFor("held.gcode"), "A") === "queued"
+      }, function() {
+        h.check("status says the scan is held",
+                watcher.status.indexOf("held until a printer is free") !== -1,
+                watcher.status)
+        h.checkEq("row is flagged as still pending",
+                  root.rowFor("held.gcode").worst, "pending")
 
-        h.check("nothing recorded while deferred", watcher.activity.length === 0,
-                "activity: " + JSON.stringify(watcher.activity))
-
-        // Job ends: the queue should drain without another filesystem event.
+        // Job ends: the queue drains without another filesystem event.
         busyConn.state = "ready"
 
-        h.waitFor("queue drains once the printer is idle",
-                  function() { return watcher.activity.length > 0 }, function() {
-          var a = watcher.activity[0]
-          h.checkEq("deferred file eventually scanned", a.file, "held.gcode")
-          // Mock is configured to answer 404 for this scenario.
-          h.checkEq("404 reported as a skip, not a failure", a.text, "1 didn't have the file")
-          h.checkEq("skip is toned warn, not error", a.tone, "warn")
+        h.waitFor("held scan runs once the printer is idle", function() {
+          return root.stateOf(root.rowFor("held.gcode"), "A") !== "queued"
+        }, function() {
+          // The mock answers 404 for this scenario: the printer's gcodes root
+          // does not contain the file, which is a skip rather than a failure.
+          h.checkEq("404 reported as missing, not failed",
+                    root.stateOf(root.rowFor("held.gcode"), "A"), "missing")
+          h.check("row is not flagged as a failure",
+                  root.rowFor("held.gcode").worst !== "failed",
+                  root.rowFor("held.gcode").worst)
           h.done()
         }, 30000)
       }, 20000)

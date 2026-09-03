@@ -43,6 +43,23 @@ ShellRoot {
 
   Plugin.GcodeWatcher { id: watcher; service: fakeService }
 
+
+  // Per-printer state for one file in the activity list.
+  function stateOf(row, printerName) {
+    if (!row) return "none"
+    for (var i = 0; i < row.printers.length; i++)
+      if (row.printers[i].name === printerName) return row.printers[i].state
+    return "none"
+  }
+
+  function allState(row) {
+    if (!row || row.printers.length === 0) return "none"
+    var seen = row.printers[0].state
+    for (var i = 1; i < row.printers.length; i++)
+      if (row.printers[i].state !== seen) return "mixed"
+    return seen
+  }
+
   function activityFor(name) {
     for (var i = 0; i < watcher.activity.length; i++)
       if (watcher.activity[i].file === name) return watcher.activity[i]
@@ -77,8 +94,9 @@ ShellRoot {
                       function() { return root.activityFor("fresh_dir/new.gcode") !== null }, function() {
 
               var a = root.activityFor("root.gcode")
-              h.checkEq("summary counts both printers", a ? a.text : "", "scanned on 2 printers")
-              h.checkEq("successful scan is toned ok", a ? a.tone : "", "ok")
+              h.checkEq("both printers listed", a ? a.printers.length : 0, 2)
+              h.checkEq("both report scanned", root.allState(a), "ok")
+              h.checkEq("row is not flagged pending or failed", a ? a.worst : "", "ok")
 
               h.check("non-gcode file ignored", root.activityFor("notes.txt") === null)
               h.check("hidden-directory file ignored", root.activityFor(".hidden/skip.gcode") === null)

@@ -31,8 +31,48 @@ Item {
   // watcher with nothing to do), so every failure path writes a status.
   property string status: "Not watching"
   property bool failed: false
-  // Newest first, capped — one row per file, summarizing all printers.
-  property var activity: []
+  // One record per file, newest first and capped, each tracking every printer
+  // separately: relPath -> { at, printers: { printerId: state } } where state
+  // is queued | scanning | ok | missing | failed. A single rolled-up count was
+  // both less useful and actively wrong -- a re-enqueued file reset it, so
+  // completions from the previous batch drove it to zero early and reported a
+  // finished scan that had not happened.
+  property var _files: ({})
+  property var _order: []
+  readonly property int _maxRows: 8
+
+  // Rendered form for the settings panel, rebuilt whenever the underlying
+  // records or the printer list change.
+  readonly property var activity: buildActivity(_files, _order,
+                                                service ? service.printers : [])
+
+  function buildActivity(files, order, printers) {
+    var rows = []
+    for (var i = 0; i < order.length; i++) {
+      var rel = order[i]
+      var rec = files[rel]
+      if (!rec) continue
+      var entries = []
+      var worst = "ok"
+      for (var p = 0; p < printers.length; p++) {
+        var st = rec.printers[printers[p].id]
+        if (st === undefined) continue
+        entries.push({ name: Model.printerDisplayName(printers[p]), state: st })
+        if (st === "failed") worst = "failed"
+        else if (worst !== "failed" && (st === "queued" || st === "scanning")) worst = "pending"
+      }
+      rows.push({ file: rel, at: rec.at, note: rec.note || "", printers: entries, worst: worst })
+    }
+    return rows
+  }
+
+  function _setFileState(relPath, printerId, state) {
+    var files = _files
+    if (!files[relPath]) return
+    files[relPath].printers[printerId] = state
+    _files = files
+    _filesChanged()
+  }
 
   // Files seen but not yet turned into scan jobs. A slicer that writes then
   // renames emits both close_write and moved_to for one file, so events are
@@ -40,9 +80,6 @@ Item {
   property var _pending: ({})
   // Flat list of {relPath, printerId} still to run, drained one at a time.
   property var _queue: []
-  // relPath -> {pending, ok, notFound, failed, lastError}, so an activity row
-  // is only emitted once every printer has answered for that file.
-  property var _fileState: ({})
   property var _current: null
   property bool _backoff: false
 
@@ -188,28 +225,62 @@ Item {
 
   function enqueue(relPaths) {
     if (!service) return
+
     var targets = []
     for (var i = 0; i < service.printers.length; i++) {
       var conn = service.connectionFor(service.printers[i].id)
       if (conn && conn.reachable) targets.push(service.printers[i].id)
     }
-    if (targets.length === 0) {
-      // Nothing to scan against right now. Moonraker parses whatever metadata
-      // it's missing when its own file_manager starts up, so a fleet that's
-      // entirely offline heals itself on next boot — recording the skip is
-      // more honest than silently dropping the file.
-      for (var f = 0; f < relPaths.length; f++) pushActivity(relPaths[f], "No printers reachable", "warn")
-      return
-    }
+
+    var files = _files
+    var order = _order
     var queue = _queue.slice()
-    var stateMap = _fileState
+    var added = 0
+
     for (var p = 0; p < relPaths.length; p++) {
-      stateMap[relPaths[p]] = { pending: targets.length, ok: 0, notFound: 0, failed: 0, lastError: "" }
-      for (var t = 0; t < targets.length; t++) queue.push({ relPath: relPaths[p], printerId: targets[t] })
+      var rel = relPaths[p]
+
+      // Already tracked with work outstanding: leave it alone. Re-adding it
+      // would queue a second set of jobs for the same file, which is how the
+      // queue used to grow without bound while a printer was busy.
+      if (_hasOutstandingWork(files[rel])) continue
+
+      var rec = { at: Qt.formatDateTime(new Date(), "hh:mm"), printers: {}, note: "" }
+      if (targets.length === 0) {
+        // Moonraker parses whatever metadata it is missing when its own file
+        // manager starts, so a fleet that is entirely offline heals itself on
+        // next boot. Recording the skip is more honest than dropping the file.
+        rec.note = "No printers reachable"
+      }
+      for (var t = 0; t < targets.length; t++) {
+        rec.printers[targets[t]] = "queued"
+        queue.push({ relPath: rel, printerId: targets[t] })
+      }
+
+      files[rel] = rec
+      order = [rel].concat(order.filter(function(x) { return x !== rel })).slice(0, _maxRows)
+      added++
     }
-    _fileState = stateMap
+
+    _files = files
+    _order = order
     _queue = queue
+
+    // Observation is complete the moment a batch is recorded, so the mark
+    // advances here rather than when the scans finish. Gating it on a drained
+    // queue meant a single deferred printer held the mark back forever, and
+    // every sweep re-discovered the same files.
+    if (added > 0) commitSeenMark()
+
     drain()
+  }
+
+  function _hasOutstandingWork(rec) {
+    if (!rec) return false
+    for (var id in rec.printers) {
+      if (rec.printers[id] === "queued" || rec.printers[id] === "scanning") return true
+    }
+    return false
   }
 
   // ---------------------------------------------------------------- scanning
@@ -228,9 +299,12 @@ Item {
     if (_current !== null || _queue.length === 0) return
     var idx = runnableIndex()
     if (idx === -1) {
-      // Everything left is blocked on a printer that's printing or offline.
-      // Hold it and re-check — the queue is small and entirely in memory.
-      status = _queue.length + " scan" + (_queue.length === 1 ? "" : "s") + " waiting for a free printer"
+      // Everything left is blocked on a printer that is printing or offline.
+      // Hold it and re-check; the queue is small and entirely in memory. The
+      // per-file rows below say which machine each one is waiting on, so this
+      // line only has to say that something is waiting.
+      status = _queue.length + " scan" + (_queue.length === 1 ? "" : "s")
+        + " held until a printer is free"
       retryTimer.restart()
       return
     }
@@ -243,6 +317,7 @@ Item {
       finishJob({ ok: false, notFound: false, error: "printer removed" })
       return
     }
+    _setFileState(job.relPath, job.printerId, "scanning")
     status = "Scanning " + job.relPath + " on " + Model.printerDisplayName(printer) + "…"
     // A large file on a Pi takes seconds to parse and Moonraker answers only
     // once it's done, so the timeout is generous and jobs run strictly one at
@@ -257,39 +332,17 @@ Item {
     var job = _current
     _current = null
     if (job) {
-      var stateMap = _fileState
-      var entry = stateMap[job.relPath]
-      if (entry) {
-        entry.pending--
-        if (result.ok) entry.ok++
-        else if (result.notFound) entry.notFound++
-        else { entry.failed++; entry.lastError = result.error }
-        if (entry.pending <= 0) {
-          delete stateMap[job.relPath]
-          pushActivity(job.relPath, summarize(entry), entry.failed > 0 ? "error" : (entry.ok > 0 ? "ok" : "warn"))
-        }
+      var state = result.ok ? "ok" : (result.notFound ? "missing" : "failed")
+      _setFileState(job.relPath, job.printerId, state)
+      if (state === "failed" && _files[job.relPath]) {
+        var files = _files
+        files[job.relPath].note = result.error
+        _files = files
+        _filesChanged()
       }
-      _fileState = stateMap
     }
-    if (_queue.length === 0 && _current === null) {
-      commitSeenMark()
-      status = statusIdle()
-    }
+    if (_queue.length === 0 && _current === null) status = statusIdle()
     drain()
-  }
-
-  function summarize(entry) {
-    var parts = []
-    if (entry.ok > 0) parts.push("scanned on " + entry.ok + " printer" + (entry.ok === 1 ? "" : "s"))
-    if (entry.notFound > 0) parts.push(entry.notFound + " didn't have the file")
-    if (entry.failed > 0) parts.push(entry.failed + " failed: " + entry.lastError)
-    return parts.join(", ")
-  }
-
-  function pushActivity(relPath, text, tone) {
-    var list = activity.slice()
-    list.unshift({ file: relPath, text: text, tone: tone, at: Qt.formatDateTime(new Date(), "hh:mm") })
-    activity = list.slice(0, 8)
   }
 
   Process {
@@ -402,7 +455,8 @@ Item {
       // Cap rather than let a clock jump or a bulk copy enqueue hundreds of
       // multi-second parses; say so instead of silently truncating.
       if (files.length > root._maxCatchUp) {
-        root.pushActivity("", (files.length - root._maxCatchUp) + " older files skipped (catch-up capped at " + root._maxCatchUp + ")", "warn")
+        root.status = (files.length - root._maxCatchUp) + " older files skipped"
+          + " (catch-up is capped at " + root._maxCatchUp + ")"
         files = files.slice(0, root._maxCatchUp)
       }
       root.enqueue(files)

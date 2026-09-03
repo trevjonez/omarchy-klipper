@@ -1201,10 +1201,15 @@ Panel {
           Repeater {
             model: printer.watcher.activity
 
+            // One row per file, then a line per printer underneath. A single
+            // rolled-up "scanned on N printers" could not say *which* machines
+            // were done and which were still waiting on a running print, which
+            // made a held queue look like a stuck one.
             Column {
               required property var modelData
               width: parent.width
               spacing: Style.space(2)
+              bottomPadding: Style.space(6)
 
               Text {
                 visible: modelData.file !== ""
@@ -1215,19 +1220,74 @@ Panel {
                 elide: Text.ElideMiddle
                 width: parent.width
               }
+
               Text {
-                text: modelData.text
-                color: modelData.tone === "error" ? Color.urgent : (modelData.tone === "warn" ? root.dim : Color.accent)
+                visible: modelData.note !== ""
+                text: modelData.note
+                color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
                 width: parent.width
+              }
+
+              Repeater {
+                model: modelData.printers
+
+                Row {
+                  required property var modelData
+                  spacing: Style.space(6)
+                  leftPadding: Style.space(4)
+
+                  Text {
+                    text: root.scanGlyph(parent.modelData.state)
+                    color: root.scanColor(parent.modelData.state)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    text: parent.modelData.name
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    text: root.scanLabel(parent.modelData.state)
+                    color: root.scanColor(parent.modelData.state)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
               }
             }
           }
         }
       }
     }
+  }
+
+  // Per-printer scan state, shown under each watched file.
+  function scanGlyph(state) {
+    if (state === "ok") return "\u2713"        // check
+    if (state === "failed") return "\u2717"    // cross
+    if (state === "scanning") return "\u25b6"  // triangle
+    if (state === "missing") return "\u2013"   // dash
+    return "\u25cb"                            // hollow circle: queued
+  }
+
+  function scanLabel(state) {
+    if (state === "ok") return "scanned"
+    if (state === "failed") return "failed"
+    if (state === "scanning") return "scanning\u2026"
+    if (state === "missing") return "doesn't have it"
+    return "waiting"
+  }
+
+  function scanColor(state) {
+    if (state === "failed") return Color.urgent
+    if (state === "ok") return Color.accent
+    if (state === "scanning") return Color.accent
+    return root.dim
   }
 
   function saveWatchDir() {

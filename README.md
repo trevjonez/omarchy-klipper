@@ -140,6 +140,9 @@ had seen the write.
 - Scans run one at a time; a scan parses the whole file on the printer's
   CPU. "Defer scans while printing" (on by default) holds new files for a
   busy printer until its job finishes.
+- The settings panel lists each watched file with a line per printer —
+  scanned, waiting, scanning, failed, or doesn't have it — so a queue held
+  behind a running print is visibly held rather than looking stuck.
 - A printer that's offline when a file lands is skipped — Moonraker parses
   whatever metadata it's missing when it next starts up, so it catches up
   on its own.

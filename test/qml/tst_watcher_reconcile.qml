@@ -46,6 +46,23 @@ ShellRoot {
   Process { id: sh; running: false; command: [] }
   function run(script) { sh.command = ["bash", "-c", script]; sh.running = true }
 
+
+  // Per-printer state for one file in the activity list.
+  function stateOf(row, printerName) {
+    if (!row) return "none"
+    for (var i = 0; i < row.printers.length; i++)
+      if (row.printers[i].name === printerName) return row.printers[i].state
+    return "none"
+  }
+
+  function allState(row) {
+    if (!row || row.printers.length === 0) return "none"
+    var seen = row.printers[0].state
+    for (var i = 1; i < row.printers.length; i++)
+      if (row.printers[i].state !== seen) return "mixed"
+    return seen
+  }
+
   function activityFor(name) {
     for (var i = 0; i < watcher.activity.length; i++)
       if (watcher.activity[i].file === name) return watcher.activity[i]
@@ -74,7 +91,7 @@ ShellRoot {
           h.waitFor("sweep finds what the event stream missed",
                     function() { return root.activityFor("deaf.gcode") !== null }, function() {
             var a = root.activityFor("deaf.gcode")
-            h.checkEq("scanned on the reachable printer", a.text, "scanned on 1 printer")
+            h.checkEq("the reachable printer scanned it", root.stateOf(a, "A"), "ok")
             h.check("sweep timestamp recorded", watcher._lastSweepEpoch > 0)
             h.check("status reports when it last checked",
                     watcher.status.indexOf("last checked") !== -1, watcher.status)
