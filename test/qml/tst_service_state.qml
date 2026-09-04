@@ -68,7 +68,20 @@ ShellRoot {
         svc.removePrinter(secondId)
         h.checkEq("printer removed", svc.printers.length, 1)
         h.checkEq("removing the active printer reselects", svc.activePrinterId, firstId)
-        h.done()
+
+        // Two events from one printer must leave one toast, not two: the id
+        // handed back by the first send is what the second one replaces.
+        // tst_service_state.expect.js asserts the -r on the real command line.
+        svc.sendNotification(firstId, { urgency: "normal", headline: "ToastA", body: "one" })
+        h.waitFor("notification id comes back from the send", function() {
+          return svc.notificationIds[firstId] > 0
+        }, function() {
+          var firstToast = svc.notificationIds[firstId]
+          svc.sendNotification(firstId, { urgency: "normal", headline: "ToastB", body: "two" })
+          h.waitFor("the replacement send completes", function() {
+            return svc.notificationIds[firstId] > 0 && svc.notificationIds[firstId] !== firstToast
+          }, function() { h.done() })
+        })
       })
     })
   }

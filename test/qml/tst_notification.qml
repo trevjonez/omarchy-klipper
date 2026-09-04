@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "Model.js" as Model
 import "." as Plugin
 
 // A finished print must reach the user even when its printer isn't the one on
@@ -25,7 +26,7 @@ ShellRoot {
       var list = root.seen.slice()
       list.push(notif)
       root.seen = list
-      notifyProcess.command = ["omarchy-notification-send", "-u", notif.urgency, notif.headline, notif.body]
+      notifyProcess.command = Model.notificationArgs(notif, 0)
       notifyProcess.running = true
     }
   }

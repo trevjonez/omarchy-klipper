@@ -466,6 +466,14 @@ test('durations and remaining-time estimate', () => {
   assert.equal(M.estimateRemainingSec(50, 0), null);
 });
 
+test('notificationArgs replaces a printer\'s previous toast when it has an id', () => {
+  const n = { urgency: 'normal', headline: 'Voron: print complete', body: 'a.gcode finished' };
+  assert.deepEqual(M.notificationArgs(n, 0),
+    ['omarchy-notification-send', '-u', 'normal', '-p', 'Voron: print complete', 'a.gcode finished']);
+  assert.deepEqual(M.notificationArgs(n, 17),
+    ['omarchy-notification-send', '-u', 'normal', '-p', '-r', '17', 'Voron: print complete', 'a.gcode finished']);
+});
+
 test('notificationForTransition fires only on meaningful changes', () => {
   assert.equal(M.notificationForTransition('printing', 'printing', 'Voron', 'a.gcode', ''), null);
   // First reading after connecting is not a transition -- a printer that was

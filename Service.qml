@@ -180,7 +180,44 @@ Item {
     if (seen[printerId] === notif.headline) return
     seen[printerId] = notif.headline
     persisted.notifiedFor = JSON.stringify(seen)
-    Quickshell.execDetached(["omarchy-notification-send", "-u", notif.urgency, notif.headline, notif.body])
+    notifyQueue = notifyQueue.concat([{ printerId: printerId, notif: notif }])
+    pumpNotifications()
+  }
+
+  // A printer owns at most one toast at a time: its next notification replaces
+  // the previous one instead of stacking a second entry on the shade, so a
+  // print that starts, finishes and then errors reads as one live line per
+  // printer. The id to replace is only knowable from the notification daemon's
+  // reply, so sends run as a real Process (-p prints the id) rather than
+  // fire-and-forget, and queue behind each other because one Process carries
+  // one send at a time.
+  property var notificationIds: ({})
+  property var notifyQueue: []
+
+  function pumpNotifications() {
+    if (notifyProcess.running || notifyQueue.length === 0) return
+    var next = notifyQueue[0]
+    notifyQueue = notifyQueue.slice(1)
+    notifyProcess.printerId = next.printerId
+    notifyProcess.command = Model.notificationArgs(next.notif, notificationIds[next.printerId] || 0)
+    notifyProcess.running = true
+  }
+
+  Process {
+    id: notifyProcess
+    running: false
+    command: []
+    property string printerId: ""
+    stdout: StdioCollector { id: notifyStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      // Whatever id came back is the one the *next* notification replaces; a
+      // send that failed leaves nothing on screen to replace, so forget it and
+      // let the next one open a fresh toast.
+      var id = parseInt(String(notifyStdout.text || "").trim(), 10)
+      if (exitCode === 0 && id > 0) root.notificationIds[notifyProcess.printerId] = id
+      else delete root.notificationIds[notifyProcess.printerId]
+      root.pumpNotifications()
+    }
   }
 
   function isPlainObject(v) { return !!v && typeof v === "object" && !Array.isArray(v) }

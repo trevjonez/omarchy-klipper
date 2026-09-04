@@ -967,6 +967,18 @@ function notificationForTransition(prevState, nextState, printerName, filename, 
   return { urgency: "critical", headline: printerName + ": print error", body: message || ("Failed" + subject) };
 }
 
+// argv for one desktop notification. `-p` makes omarchy-notification-send
+// print the id the notification daemon assigned; feeding that id back as `-r`
+// on the next notification for the same printer replaces the toast in place,
+// so a printer that starts, finishes and errors leaves one entry on the shade
+// rather than three. A replaceId of 0 (or an unknown one, after the daemon
+// restarted) simply means a fresh notification.
+function notificationArgs(notif, replaceId) {
+  var args = ["omarchy-notification-send", "-u", notif.urgency, "-p"];
+  if (replaceId > 0) args = args.concat(["-r", String(replaceId)]);
+  return args.concat([notif.headline, notif.body]);
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     DEFAULT_PORT: DEFAULT_PORT,
@@ -1041,6 +1053,7 @@ if (typeof module !== "undefined") {
     stateTone: stateTone,
     formatDuration: formatDuration,
     estimateRemainingSec: estimateRemainingSec,
-    notificationForTransition: notificationForTransition
+    notificationForTransition: notificationForTransition,
+    notificationArgs: notificationArgs
   };
 }

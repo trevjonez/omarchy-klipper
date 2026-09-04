@@ -4,3 +4,10 @@
 # the developer's desktop. Recording argv verbatim means the test asserts the
 # real command line, not a paraphrase of it.
 printf '%s\n' "$*" >> "${NOTIFY_LOG:-/dev/null}"
+
+# The real command prints the daemon's notification id under -p, and the shell
+# feeds that id back as -r to replace that toast rather than stack another.
+# Numbering by invocation is enough for a test to follow that round trip.
+if [[ " $* " == *" -p "* ]]; then
+  wc -l <"${NOTIFY_LOG:-/dev/null}" | tr -d ' '
+fi
