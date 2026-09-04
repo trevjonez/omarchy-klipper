@@ -310,6 +310,90 @@ function apiKeyHeaderArgs(printer) {
   return printer.apiKey ? ["-H", "X-Api-Key: " + printer.apiKey] : [];
 }
 
+// ---------------------------------------------------------------- power
+
+// Moonraker's [power] component is optional, so a printer either reports
+// devices here or answers 404. Everything power-related in the UI keys off
+// whether this list came back non-empty.
+function powerDevicesUrl(printer, scheme) {
+  return baseUrl(printer, scheme) + "/machine/device_power/devices";
+}
+
+function powerActionUrl(printer, device, action, scheme) {
+  return baseUrl(printer, scheme) + "/machine/device_power/device?device="
+    + encodeURIComponent(device) + "&action=" + encodeURIComponent(action);
+}
+
+function normalizePowerDevice(raw) {
+  if (!isPlainObject(raw)) return null;
+  var name = trimmed(raw.device);
+  if (!name) return null;
+  return {
+    device: name,
+    status: trimmed(raw.status).toLowerCase(),
+    lockedWhilePrinting: raw.locked_while_printing === true,
+    type: trimmed(raw.type)
+  };
+}
+
+// The plugin drives one device per printer -- the machine's own switch. A
+// multi-device setup (lights, filtration) would need a picker, which is not
+// worth building until someone has one.
+function parsePowerDevices(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    var list = data && data.result && data.result.devices;
+    if (!Array.isArray(list)) return [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var dev = normalizePowerDevice(list[i]);
+      if (dev) out.push(dev);
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
+// notify_power_changed carries exactly the same shape as one entry of the
+// device list, so a live update needs no separate parsing rules.
+function parsePowerChanged(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    if (!isPlainObject(data) || data.method !== "notify_power_changed") return null;
+    var params = Array.isArray(data.params) ? data.params[0] : null;
+    return normalizePowerDevice(params);
+  } catch (e) {
+    return null;
+  }
+}
+
+// A printer whose power is switched off is not broken, and saying "Klipper
+// disconnected" about it is technically true and practically useless. Only
+// claim it when Klipper is actually down -- with power on, a disconnect is a
+// real fault and should still read as one.
+function effectiveStateLabel(state, powerStatus) {
+  if (powerStatus === "off" && (state === "" || state.indexOf("klippy_") === 0 || state === "offline")) {
+    return "Printer off";
+  }
+  return stateLabel(state);
+}
+
+function effectiveStateTone(state, powerStatus) {
+  if (powerStatus === "off" && (state === "" || state.indexOf("klippy_") === 0 || state === "offline")) {
+    return "normal";
+  }
+  return stateTone(state);
+}
+
+// Moonraker refuses a power change mid-print when the device is configured
+// locked_while_printing, so offering the button would just produce an error.
+function canTogglePower(device, state) {
+  if (!device || (device.status !== "on" && device.status !== "off")) return false;
+  if (device.status === "on" && device.lockedWhilePrinting && jobInProgress(state)) return false;
+  return true;
+}
+
 // ---------------------------------------------------------------- gcode watching
 
 // Exactly Moonraker's VALID_GCODE_EXTS (file_manager.py) — it rejects a
@@ -689,6 +773,21 @@ function mergeStatusObjects(current, delta) {
 // freezes on the last state seen before the shutdown -- an emergency stop
 // followed by a firmware restart would leave it reading "Klipper shut down"
 // forever.
+// Moonraker answers printer.objects.subscribe with an error while Klippy is
+// down -- which is exactly the situation when the printer is switched off at
+// the wall. Recognising it keeps the connection usable (Moonraker itself is
+// answering) instead of leaving the panel blank.
+function parseSubscribeError(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    if (!isPlainObject(data) || !isPlainObject(data.error)) return null;
+    if (data.id === undefined || data.id === null) return null;
+    return trimmed(data.error.message) || "Klipper is not connected";
+  } catch (e) {
+    return null;
+  }
+}
+
 function parseKlippyLifecycle(raw) {
   try {
     var data = JSON.parse(String(raw || ""));
@@ -902,6 +1001,13 @@ if (typeof module !== "undefined") {
     normalizeVideoOverlays: normalizeVideoOverlays,
     DEFAULT_APP_SETTINGS: DEFAULT_APP_SETTINGS,
     normalizeAppSettings: normalizeAppSettings,
+    powerDevicesUrl: powerDevicesUrl,
+    powerActionUrl: powerActionUrl,
+    parsePowerDevices: parsePowerDevices,
+    parsePowerChanged: parsePowerChanged,
+    effectiveStateLabel: effectiveStateLabel,
+    effectiveStateTone: effectiveStateTone,
+    canTogglePower: canTogglePower,
     GCODE_EXTS: GCODE_EXTS,
     isGcodePath: isGcodePath,
     relativeGcodePath: relativeGcodePath,
@@ -924,6 +1030,7 @@ if (typeof module !== "undefined") {
     mergeStatusObjects: mergeStatusObjects,
     parseNotifyStatusUpdate: parseNotifyStatusUpdate,
     parseKlippyLifecycle: parseKlippyLifecycle,
+    parseSubscribeError: parseSubscribeError,
     subscribeRequestJson: subscribeRequestJson,
     parseSubscribeResponse: parseSubscribeResponse,
     websocketUrl: websocketUrl,

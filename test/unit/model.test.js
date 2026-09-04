@@ -164,6 +164,60 @@ test('camera grid stays as square as possible', () => {
   }
 });
 
+test('power devices', () => {
+  // Shape taken verbatim from a real Moonraker with a gpio device.
+  const real = JSON.stringify({ result: { devices: [
+    { device: 'printer', status: 'off', locked_while_printing: true, type: 'gpio' },
+  ] } });
+  assert.deepEqual(M.parsePowerDevices(real), [
+    { device: 'printer', status: 'off', lockedWhilePrinting: true, type: 'gpio' },
+  ]);
+  // A printer without the [power] component answers 404, which is normal.
+  assert.deepEqual(M.parsePowerDevices('{"error":{"message":"Not Found"}}'), []);
+  assert.deepEqual(M.parsePowerDevices('garbage'), []);
+
+  // notify_power_changed carries one device in the same shape.
+  const push = JSON.stringify({ jsonrpc: '2.0', method: 'notify_power_changed',
+    params: [{ device: 'printer', status: 'on', locked_while_printing: true, type: 'gpio' }] });
+  assert.equal(M.parsePowerChanged(push).status, 'on');
+  assert.equal(M.parsePowerChanged(JSON.stringify({ method: 'notify_status_update', params: [{}] })), null);
+
+  assert.equal(M.powerActionUrl({ host: 'h', port: 7125, scheme: 'http' }, 'printer', 'on'),
+    'http://h:7125/machine/device_power/device?device=printer&action=on');
+});
+
+test('a printer switched off reads as off, not as a Klipper fault', () => {
+  // "Klipper disconnected" is true when the power is off, and useless.
+  assert.equal(M.effectiveStateLabel('klippy_disconnected', 'off'), 'Printer off');
+  assert.equal(M.effectiveStateLabel('klippy_shutdown', 'off'), 'Printer off');
+  assert.equal(M.effectiveStateLabel('offline', 'off'), 'Printer off');
+  assert.equal(M.effectiveStateTone('klippy_disconnected', 'off'), 'normal',
+    'being switched off is not an alarm');
+
+  // With power on, a disconnect is a real fault and must still say so.
+  assert.equal(M.effectiveStateLabel('klippy_disconnected', 'on'), 'Klipper disconnected');
+  // warning rather than urgent: only klippy_error / offline / error are urgent.
+  assert.equal(M.effectiveStateTone('klippy_disconnected', 'on'), 'warning');
+  // And a printer with no power component behaves exactly as before.
+  assert.equal(M.effectiveStateLabel('klippy_disconnected', ''), 'Klipper disconnected');
+  assert.equal(M.effectiveStateLabel('printing', 'on'), 'Printing');
+});
+
+test('power toggling respects locked_while_printing', () => {
+  const locked = { status: 'on', lockedWhilePrinting: true };
+  const unlocked = { status: 'on', lockedWhilePrinting: false };
+  // Moonraker refuses the change mid-print, so the button must be disabled.
+  assert.equal(M.canTogglePower(locked, 'printing'), false);
+  assert.equal(M.canTogglePower(locked, 'paused'), false, 'paused is still a job');
+  assert.equal(M.canTogglePower(locked, 'standby'), true);
+  // Not locked: the user may cut power whenever they like.
+  assert.equal(M.canTogglePower(unlocked, 'printing'), true);
+  // Powering *on* is never restricted -- there is no print to interrupt.
+  assert.equal(M.canTogglePower({ status: 'off', lockedWhilePrinting: true }, 'printing'), true);
+  assert.equal(M.canTogglePower(null, 'standby'), false);
+  assert.equal(M.canTogglePower({ status: 'init', lockedWhilePrinting: false }, 'standby'), false);
+});
+
 // ------------------------------------------------------------ gcode paths
 
 test('relativeGcodePath maps only files Moonraker could scan', () => {

@@ -118,9 +118,43 @@ Item {
   readonly property int remainingSec: Model.estimateRemainingSec(progress, printDurationSec) || 0
   readonly property bool hasRemainingEstimate: Model.estimateRemainingSec(progress, printDurationSec) !== null
 
+  // ---- power (Moonraker's optional [power] component) ----------------------
+  readonly property bool hasPowerControl: activeConnection ? activeConnection.hasPowerControl : false
+  readonly property string powerStatus: activeConnection ? activeConnection.powerStatus : ""
+  readonly property bool powerLockedWhilePrinting:
+    activeConnection ? activeConnection.powerLockedWhilePrinting : false
+  // Moonraker rejects the change outright while printing when the device is
+  // locked, so the button is disabled rather than left to fail.
+  readonly property bool powerTogglable: Model.canTogglePower(
+    activeConnection
+      ? { status: powerStatus, lockedWhilePrinting: powerLockedWhilePrinting }
+      : null,
+    root.state)
+
+  function setPower(on) {
+    if (!activePrinter || !activeConnection || !activeConnection.hasPowerControl) return
+    runAction(Model.powerActionUrl(activePrinter, activeConnection.powerDevice,
+                                   on ? "on" : "off", preferredScheme(activePrinter)),
+              on ? "Powering on…" : "Powering off…")
+  }
+
+  function requestPowerOff() {
+    if (pendingConfirm === "poweroff") {
+      pendingConfirm = ""
+      confirmTimer.stop()
+      setPower(false)
+      return
+    }
+    pendingConfirm = "poweroff"
+    actionStatus = "Press again to confirm power off"
+    confirmTimer.restart()
+  }
+
   readonly property bool jobInProgress: Model.jobInProgress(root.state)
-  function stateLabel() { return Model.stateLabel(root.state) }
-  function stateTone() { return Model.stateTone(root.state) }
+  // Power-aware: a printer switched off at the wall reads "Printer off"
+  // rather than "Klipper disconnected", which is true but useless.
+  function stateLabel() { return Model.effectiveStateLabel(root.state, root.powerStatus) }
+  function stateTone() { return Model.effectiveStateTone(root.state, root.powerStatus) }
   function formatDuration(sec) { return Model.formatDuration(sec) }
 
   // Scheme for one-shot HTTP calls (webcams fetch, actions): whatever this
@@ -187,7 +221,12 @@ Item {
       var stdout = String(webcamsStdout.text || "")
       if (exitCode !== 0 || stdout === "") return // leave the cached list showing rather than collapsing it
       var parsed = Model.parseWebcamsResponse(stdout, root.activePrinter, preferredScheme(root.activePrinter))
-      root.webcams = parsed
+      // Only reassign when the list actually changed. `webcams` is the model
+      // the camera Repeater renders, so handing it a fresh array rebuilt every
+      // delegate -- destroying and restarting each MediaPlayer -- once every
+      // 60s poll, even though the answer was identical every time. That is
+      // what kept resetting the stream.
+      if (JSON.stringify(root.webcams) !== JSON.stringify(parsed)) root.webcams = parsed
       // Persisted per-printer so the panel can size the camera area
       // correctly the instant this printer is selected again, before this
       // (slow, 60s) fetch has had a chance to run.

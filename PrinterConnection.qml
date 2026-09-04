@@ -35,6 +35,13 @@ Item {
   // is actually configured to display.
   property var sensors: ({})
 
+  // Moonraker's [power] component is optional. Empty name means this printer
+  // has none, and every power affordance stays hidden.
+  property string powerDevice: ""
+  property string powerStatus: ""
+  property bool powerLockedWhilePrinting: false
+  readonly property bool hasPowerControl: powerDevice !== ""
+
   property var _rawStatus: ({})
   property string _prevState: ""
   property bool everConnected: false
@@ -107,6 +114,10 @@ Item {
     onStatusChanged: {
       if (status === WebSocket.Open) {
         sendTextMessage(Model.subscribeRequestJson(root.sensorObjectNames))
+        // Independent of the subscribe: with the printer switched off at the
+        // wall Klippy is down and subscribe fails, which is the exact moment
+        // the power state matters most.
+        root.discoverPower()
         return
       }
       if (status === WebSocket.Closed || status === WebSocket.Error) {
@@ -148,6 +159,30 @@ Item {
       // Klippy's lifecycle, which Moonraker reports separately from status.
       // It discards every subscription when Klippy disconnects but keeps this
       // websocket open, so nothing further arrives until we ask again.
+      // Power changes arrive on this same socket, including ones made from
+      // Mainsail or a physical switch.
+      var subscribeError = Model.parseSubscribeError(message)
+      if (subscribeError !== null) {
+        root.everConnected = true
+        root.reachable = true
+        root.state = "klippy_disconnected"
+        root.message = subscribeError
+        root.progress = 0
+        root.filename = ""
+        root.sensors = {}
+        if (root.service && root.printer
+            && !(root.printer.scheme === "http" || root.printer.scheme === "https"))
+          root.service.pinPrinterScheme(root.printerId, root.schemeGuess)
+        resubscribeTimer.restart()
+        return
+      }
+
+      var power = Model.parsePowerChanged(message)
+      if (power) {
+        root.applyPowerDevice(power)
+        return
+      }
+
       var lifecycle = Model.parseKlippyLifecycle(message)
       if (lifecycle !== null) {
         root.onKlippyLifecycle(lifecycle)
@@ -159,6 +194,34 @@ Item {
         root._rawStatus = Model.mergeStatusObjects(root._rawStatus, delta)
         root.applyStatus(Model.extractStatus(root._rawStatus, root.sensorObjectNames))
       }
+    }
+  }
+
+  function applyPowerDevice(device) {
+    powerDevice = device.device
+    powerStatus = device.status
+    powerLockedWhilePrinting = device.lockedWhilePrinting
+  }
+
+  // One-shot on connect. A printer with no [power] section answers 404, which
+  // is the normal case rather than an error worth reporting.
+  function discoverPower() {
+    if (!printer || powerProcess.running) return
+    powerProcess.command = ["curl", "-fsS", "--max-time", "5"]
+      .concat(Model.apiKeyHeaderArgs(printer))
+      .concat([Model.powerDevicesUrl(printer, schemeGuess)])
+    powerProcess.running = true
+  }
+
+  Process {
+    id: powerProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: powerStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) return
+      var devices = Model.parsePowerDevices(String(powerStdout.text || ""))
+      if (devices.length > 0) root.applyPowerDevice(devices[0])
     }
   }
 

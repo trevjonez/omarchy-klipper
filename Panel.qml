@@ -692,6 +692,23 @@ Panel {
                 buttonText: "Restart Klipper"
                 onClicked: printer.restartFirmware()
               }
+
+              // Only for printers whose Moonraker has a [power] device.
+              KlipperButton {
+                visible: printer.hasPowerControl && printer.powerStatus === "off"
+                buttonText: "Power on"
+                onClicked: printer.setPower(true)
+              }
+              KlipperButton {
+                visible: printer.hasPowerControl && printer.powerStatus === "on"
+                // Shown but disabled mid-print when the device is configured
+                // locked_while_printing: Moonraker would refuse it, and hiding
+                // the button entirely just looks like the feature vanished.
+                enabled: printer.powerTogglable
+                buttonText: printer.pendingConfirm === "poweroff" ? "Confirm power off" : "Power off"
+                urgent: printer.pendingConfirm === "poweroff"
+                onClicked: printer.requestPowerOff()
+              }
             }
           }
 
@@ -1358,7 +1375,12 @@ Panel {
     id: btn
     property string buttonText: ""
     property bool urgent: false
+    // Item.enabled already blocks the click, but on its own it looks exactly
+    // like an enabled button that does nothing when pressed, so it is dimmed
+    // and loses the pointer cursor too.
     signal clicked()
+
+    opacity: btn.enabled ? 1 : 0.4
     implicitWidth: label.implicitWidth + Style.space(20)
     implicitHeight: Style.space(30)
     radius: Style.cornerRadius
@@ -1380,8 +1402,8 @@ Panel {
       id: mouse
       anchors.fill: parent
       hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onClicked: btn.clicked()
+      cursorShape: btn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onClicked: if (btn.enabled) btn.clicked()
     }
   }
 
