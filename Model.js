@@ -398,6 +398,14 @@ function webcamsUrl(printer, scheme) {
   return baseUrl(printer, scheme) + "/server/webcams/list";
 }
 
+// Snapshot polling has to defeat caching, so each refresh gets its own query
+// parameter. Kept here so the cache-buster is testable without a display.
+function snapshotUrlWithCacheBust(url, counter) {
+  var base = trimmed(url);
+  if (!base) return "";
+  return base + (base.indexOf("?") === -1 ? "?" : "&") + "_=" + counter;
+}
+
 // A config can store an already-absolute URL (e.g. a camera on a different
 // host); only relative paths get joined to mediaBaseUrl.
 function resolveWebcamUrl(printer, urlValue, scheme) {
@@ -880,6 +888,7 @@ if (typeof module !== "undefined") {
     mediaBaseUrl: mediaBaseUrl,
     webcamsUrl: webcamsUrl,
     resolveWebcamUrl: resolveWebcamUrl,
+    snapshotUrlWithCacheBust: snapshotUrlWithCacheBust,
     parseWebcamsResponse: parseWebcamsResponse,
     parseAspectRatio: parseAspectRatio,
     normalizeDisplaySensorEntry: normalizeDisplaySensorEntry,

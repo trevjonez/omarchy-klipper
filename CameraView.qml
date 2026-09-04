@@ -1,6 +1,7 @@
 import QtQuick
 import QtMultimedia
 import qs.Commons
+import "Model.js" as Model
 
 // Renders one enabled webcam from Moonraker's /server/webcams/list. Tries
 // real video first (QtMultimedia's MediaPlayer/VideoOutput against the
@@ -25,14 +26,60 @@ Item {
   property bool usingSnapshotFallback: streamUrl === ""
   property bool videoReady: false
   property int snapshotCounter: 0
+  // True once any snapshot has rendered. The placeholder is gated on this
+  // rather than on the current load, so it appears once while connecting
+  // instead of flashing back over the picture on every refresh.
+  property bool hasSnapshot: false
+  // A retry attempt is in flight. Video keeps playing underneath while the
+  // snapshot stays on screen, so a failed retry costs nothing visible and a
+  // successful one swaps in a live frame rather than a blank wait.
+  property bool retryingVideo: false
+  // Which of the two snapshot images is currently on screen.
+  property bool frontIsA: true
+
+  // Loads into whichever image is hidden, and shows it only once it has
+  // decoded. A single Image whose source changes goes blank while the
+  // replacement loads, which is the flicker this avoids.
+  function refreshSnapshot() {
+    if (snapshotUrl === "") return
+    snapshotCounter++
+    var url = Model.snapshotUrlWithCacheBust(snapshotUrl, snapshotCounter)
+    if (frontIsA) snapshotB.source = url
+    else snapshotA.source = url
+  }
+
+  function presentSnapshot(isA) {
+    frontIsA = isA
+    hasSnapshot = true
+  }
 
   height: width * aspectRatio
   clip: true
 
   function fallBackToSnapshot() {
+    retryingVideo = false
     if (usingSnapshotFallback) return
     usingSnapshotFallback = true
     player.stop()
+  }
+
+  // Falling back used to be permanent, to avoid flapping between video and
+  // stills. But a stalled stream is usually transient -- a Klipper error
+  // loading the Pi, a brief network drop -- so staying on 1fps stills until
+  // the panel happens to be rebuilt is the wrong trade. Retry periodically
+  // instead, without disturbing what is on screen.
+  function retryVideo() {
+    if (!usingSnapshotFallback || streamUrl === "" || retryingVideo) return
+    retryingVideo = true
+    videoReady = false
+    player.stop()
+    player.play()
+  }
+
+  function adoptVideo() {
+    videoReady = true
+    retryingVideo = false
+    usingSnapshotFallback = false
   }
 
   Item {
@@ -51,21 +98,29 @@ Item {
     }
 
     Image {
-      id: snapshotImage
+      id: snapshotA
       anchors.fill: parent
-      visible: root.usingSnapshotFallback
+      visible: root.usingSnapshotFallback && root.frontIsA
       fillMode: Image.PreserveAspectFit
       cache: false
       asynchronous: true
-      source: root.usingSnapshotFallback && root.snapshotUrl !== ""
-        ? root.snapshotUrl + (root.snapshotUrl.indexOf("?") === -1 ? "?" : "&") + "_=" + root.snapshotCounter
-        : ""
+      onStatusChanged: if (status === Image.Ready) root.presentSnapshot(true)
+    }
+
+    Image {
+      id: snapshotB
+      anchors.fill: parent
+      visible: root.usingSnapshotFallback && !root.frontIsA
+      fillMode: Image.PreserveAspectFit
+      cache: false
+      asynchronous: true
+      onStatusChanged: if (status === Image.Ready) root.presentSnapshot(false)
     }
   }
 
   Text {
     anchors.centerIn: parent
-    visible: root.usingSnapshotFallback && snapshotImage.status !== Image.Ready
+    visible: root.usingSnapshotFallback && !root.hasSnapshot
     text: root.snapshotUrl === "" ? "No camera feed" : "Loading camera…"
     color: root.foreground
     font.family: root.fontFamily
@@ -95,11 +150,16 @@ Item {
 
   MediaPlayer {
     id: player
-    source: root.usingSnapshotFallback ? "" : root.streamUrl
+    // Kept loaded during a retry so the attempt can run underneath the
+    // snapshot that is still being displayed.
+    source: (!root.usingSnapshotFallback || root.retryingVideo) ? root.streamUrl : ""
     videoOutput: videoOutput
     autoPlay: true
-    onPlaybackStateChanged: if (playbackState === MediaPlayer.PlayingState) root.videoReady = true
-    onErrorOccurred: root.fallBackToSnapshot()
+    onPlaybackStateChanged: if (playbackState === MediaPlayer.PlayingState) root.adoptVideo()
+    onErrorOccurred: {
+      if (root.retryingVideo) root.retryingVideo = false
+      else root.fallBackToSnapshot()
+    }
   }
 
   Timer {
@@ -108,8 +168,24 @@ Item {
     // waiting for a settled MediaStatus would never fire for a live source.
     id: videoWatchdog
     interval: 5000
-    running: !root.usingSnapshotFallback
-    onTriggered: if (!root.videoReady) root.fallBackToSnapshot()
+    running: !root.usingSnapshotFallback || root.retryingVideo
+    onTriggered: {
+      if (root.videoReady) return
+      // A retry that did not take just ends; the snapshot was never replaced,
+      // so there is nothing to tear down and nothing flickers.
+      if (root.retryingVideo) { root.retryingVideo = false; root.player.stop() }
+      else root.fallBackToSnapshot()
+    }
+  }
+
+  Timer {
+    // Slow enough that a camera which is genuinely gone is not hammered, quick
+    // enough that a transient stall self-heals well inside a print.
+    id: videoRetryTimer
+    interval: 30000
+    repeat: true
+    running: root.usingSnapshotFallback && root.streamUrl !== ""
+    onTriggered: root.retryVideo()
   }
 
   Timer {
@@ -118,6 +194,6 @@ Item {
     repeat: true
     running: root.usingSnapshotFallback && root.snapshotUrl !== ""
     triggeredOnStart: true
-    onTriggered: root.snapshotCounter++
+    onTriggered: root.refreshSnapshot()
   }
 }

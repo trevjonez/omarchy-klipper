@@ -237,6 +237,21 @@ test('URL builders', () => {
   assert.deepEqual(M.apiKeyHeaderArgs({ apiKey: 'k' }), ['-H', 'X-Api-Key: k']);
 });
 
+test('snapshot cache-buster', () => {
+  // The snapshot fallback re-fetches the same URL once a second, so each
+  // request needs to be distinct or a cache serves one frame forever.
+  assert.equal(M.snapshotUrlWithCacheBust('http://h/webcam/snap', 3),
+    'http://h/webcam/snap?_=3');
+  // Moonraker's own snapshot URLs already carry a query string.
+  assert.equal(M.snapshotUrlWithCacheBust('http://h/webcam/?action=snapshot', 7),
+    'http://h/webcam/?action=snapshot&_=7');
+  assert.equal(M.snapshotUrlWithCacheBust('', 1), '', 'no url, nothing to fetch');
+  assert.equal(M.snapshotUrlWithCacheBust(null, 1), '');
+  // Successive counters must differ, or the cache defeats the whole point.
+  assert.notEqual(M.snapshotUrlWithCacheBust('http://h/s', 1),
+                  M.snapshotUrlWithCacheBust('http://h/s', 2));
+});
+
 test('websocketUrl carries the api key as a query token', () => {
   // Headers cannot be set on a QML WebSocket, so the key has to ride the URL.
   const p = { host: 'voron.lan', port: 7125, scheme: 'http', apiKey: 'secret key' };
