@@ -12,6 +12,34 @@ function trimmed(value) {
   return String(value === undefined || value === null ? "" : value).replace(/^\s+|\s+$/g, "");
 }
 
+// Every string Moonraker hands us is untrusted: a configured endpoint can be
+// hostile or compromised, and its strings end up in QML Text items, in
+// notifications, and in the shell's own tooltip. Bound the length so one reply
+// cannot wedge the panel with a megabyte of text, and drop control characters
+// (newlines included) so a value stays the single line it is rendered as.
+// Markup is handled at the sink -- every Text is PlainText -- except for the
+// tooltip, which leaves this process; see plainTooltip.
+function remoteText(value, maxLen) {
+  var text = trimmed(value).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ");
+  var limit = maxLen || 200;
+  return text.length > limit ? trimmed(text.substring(0, limit - 1)) + "\u2026" : text;
+}
+
+// For strings handed to a renderer that is not ours -- the bar tooltip, drawn
+// by omarchy-shell, and notification text, drawn by the notification daemon --
+// where we cannot pin textFormat to PlainText the way we can on our own Text
+// items. Qt and freedesktop rich text both need a literal "<" to open a tag
+// (and only a tag can pull an external resource), so removing angle brackets
+// leaves nothing for either renderer to interpret. "&" is left alone: it
+// cannot start a tag, and an entity renders as its own character, not markup.
+function plainForeignText(value, maxLen) {
+  return remoteText(value, maxLen).replace(/[<>]/g, "");
+}
+
+function plainTooltip(value) {
+  return plainForeignText(value, 120);
+}
+
 function clampInt(value, fallback, min, max) {
   var n = parseInt(String(value), 10);
   if (!isFinite(n)) n = fallback;
@@ -306,8 +334,22 @@ function gcodeActionUrl(printer, script, scheme) {
   return baseUrl(printer, scheme) + "/printer/gcode/script?script=" + encodeURIComponent(script);
 }
 
-function apiKeyHeaderArgs(printer) {
-  return printer.apiKey ? ["-H", "X-Api-Key: " + printer.apiKey] : [];
+function apiKeyOf(printer) {
+  return printer && printer.apiKey ? String(printer.apiKey) : "";
+}
+
+// A process command line is readable by any local user through /proc, so the
+// API key never goes in argv. curl reads options from a config file, and "-"
+// means stdin, so the key travels down a pipe only this process and curl can
+// see. Config syntax is one option per line with the value double-quoted;
+// backslash, quote and newline are the escapes that matter for a key that
+// could contain anything.
+function curlApiKeyConfig(apiKey) {
+  var key = trimmed(apiKey);
+  if (!key) return "";
+  var escaped = key.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+                   .replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  return 'header = "X-Api-Key: ' + escaped + '"\n';
 }
 
 // ---------------------------------------------------------------- power
@@ -326,11 +368,11 @@ function powerActionUrl(printer, device, action, scheme) {
 
 function normalizePowerDevice(raw) {
   if (!isPlainObject(raw)) return null;
-  var name = trimmed(raw.device);
+  var name = remoteText(raw.device, 64);
   if (!name) return null;
   return {
     device: name,
-    status: trimmed(raw.status).toLowerCase(),
+    status: remoteText(raw.status, 32).toLowerCase(),
     lockedWhilePrinting: raw.locked_while_printing === true,
     type: trimmed(raw.type)
   };
@@ -433,6 +475,59 @@ function metascanUrl(printer, relPath, scheme) {
   return baseUrl(printer, scheme) + "/server/files/metascan?filename=" + encodeURIComponent(relPath);
 }
 
+// The state file holds every printer's Moonraker API key, so the shell has to
+// own its directory outright and read nothing it has not verified.
+//
+// install -d fixes the mode of a directory that already exists as well as
+// creating one, and 0700 is what actually keeps other local users out: they
+// cannot traverse the directory whatever the file's own mode is. The directory
+// is checked for being a symlink first, since install -d would otherwise follow
+// it and apply the mode to whatever it points at.
+//
+// The read is descriptor-relative, which is the part that closes the gap
+// between "checked" and "read". The file is opened once, and every subsequent
+// step goes through that one descriptor: on Linux, stat and chmod on
+// /proc/self/fd/N are fstat and fchmod on the open file, and the content is
+// read from the same fd with `cat <&3`. So the object whose type, owner and
+// mode are verified is necessarily the object whose bytes come back -- swapping
+// the path for a symlink afterwards changes nothing, because the path is never
+// consulted again.
+//
+// Exit codes: 0 content on stdout, 3 nothing there yet (a fresh install, not an
+// error), 2 refuse -- that path is not our state and must not be read or
+// overwritten -- 1 the directory could not be secured.
+function stateReadArgs(dir, file) {
+  return ["sh", "-c",
+          'dir=$1; file=$2\n' +
+          '[ -L "$dir" ] && exit 2\n' +
+          'install -d -m 700 -- "$dir" || exit 1\n' +
+          '[ -e "$file" ] || [ -L "$file" ] || exit 3\n' +
+          'exec 3< "$file" || exit 2\n' +
+          '[ "$(stat -Lc %F /proc/self/fd/3)" = "regular file" ] || exit 2\n' +
+          '[ "$(stat -Lc %u /proc/self/fd/3)" = "$(id -u)" ] || exit 2\n' +
+          'chmod 600 /proc/self/fd/3 || exit 1\n' +
+          'cat <&3\n',
+          "sh", dir, file];
+}
+
+// The write is the same story from the other end. The content carries the API
+// keys, so it travels on stdin and never in argv; umask 077 means the new file
+// is created 0600 rather than created at the umask default and tightened after
+// the fact; and the rename is what makes the replacement atomic, so a reader
+// sees either the old file or the new one and never a half-written one.
+function stateWriteArgs(file) {
+  return ["sh", "-c",
+          'file=$1; dir=$(dirname -- "$file")\n' +
+          'umask 077\n' +
+          '[ -L "$dir" ] && exit 2\n' +
+          'install -d -m 700 -- "$dir" || exit 1\n' +
+          'tmp=$file.tmp\n' +
+          'rm -f -- "$tmp"\n' +
+          'cat > "$tmp" || { rm -f -- "$tmp"; exit 1; }\n' +
+          'mv -- "$tmp" "$file" || { rm -f -- "$tmp"; exit 1; }\n',
+          "sh", file];
+}
+
 // Long-lived stream of absolute paths, one per line. -r also picks up
 // directories created after start (verified), --exclude '/\.' keeps the
 // hidden trash/thumbnail trees out, and -q drops the banner lines so every
@@ -514,7 +609,7 @@ function parseWebcamsResponse(raw, printer, scheme) {
       var streamUrl = resolveWebcamUrl(printer, cam.stream_url, scheme);
       if (!streamUrl) continue;
       out.push({
-        name: trimmed(cam.name) || "Camera",
+        name: remoteText(cam.name, 64) || "Camera",
         streamUrl: streamUrl,
         snapshotUrl: resolveWebcamUrl(printer, cam.snapshot_url, scheme),
         flipHorizontal: cam.flip_horizontal === true,
@@ -603,9 +698,13 @@ function selectableFieldsFor(name) {
   return MULTI_FIELD_TYPES[objectTypeOf(name)] || null;
 }
 
+// A sensor's label is built from the Klipper object name, which is remote
+// input like any other reply: bounded here, at the display edge, rather than in
+// parseObjectsList, because the untouched name is what goes back to Moonraker
+// in the subscribe request.
 function sensorLabel(name) {
-  var type = objectTypeOf(name);
-  var friendly = objectFriendlyName(name);
+  var type = remoteText(objectTypeOf(name), 32);
+  var friendly = remoteText(objectFriendlyName(name), 48);
   if (type === "extruder") return friendly || "Hotend";
   if (type === "heater_bed") return "Bed";
   if (type === "heater_generic") return friendly || "Heater";
@@ -618,7 +717,7 @@ var FIELD_LABELS = { temperature: "Temp", humidity: "Humidity", pressure: "Press
 function sensorFieldLabel(name, field) {
   var base = sensorLabel(name);
   if (!field) return base;
-  return base + " — " + (FIELD_LABELS[field] || field);
+  return base + " — " + (FIELD_LABELS[field] || remoteText(field, 32));
 }
 
 // Never throws: older Moonraker, or a request that fails, just means
@@ -713,7 +812,7 @@ function extractStatus(status, sensorObjectNames) {
     return {
       ok: true,
       state: "klippy_" + klippyState,
-      message: trimmed(webhooks.state_message) || "Klipper is " + klippyState,
+      message: remoteText(webhooks.state_message, 300) || "Klipper is " + klippyState,
       progress: 0,
       filename: "",
       printDurationSec: 0,
@@ -737,9 +836,9 @@ function extractStatus(status, sensorObjectNames) {
   return {
     ok: true,
     state: trimmed(printStats.state) || "standby",
-    message: trimmed(printStats.message) || trimmed(displayStatus.message),
+    message: remoteText(printStats.message, 300) || remoteText(displayStatus.message, 300),
     progress: clampInt(Math.round((Number(progressFraction) || 0) * 100), 0, 0, 100),
-    filename: trimmed(printStats.filename),
+    filename: remoteText(printStats.filename, 256),
     printDurationSec: Number(printStats.print_duration) || 0,
     sensors: sensors
   };
@@ -782,7 +881,7 @@ function parseSubscribeError(raw) {
     var data = JSON.parse(String(raw || ""));
     if (!isPlainObject(data) || !isPlainObject(data.error)) return null;
     if (data.id === undefined || data.id === null) return null;
-    return trimmed(data.error.message) || "Klipper is not connected";
+    return remoteText(data.error.message, 300) || "Klipper is not connected";
   } catch (e) {
     return null;
   }
@@ -863,8 +962,8 @@ function parseInfoResponse(raw) {
     return {
       ok: true,
       state: trimmed(result.state) || "unknown",
-      message: trimmed(result.state_message),
-      hostname: trimmed(result.hostname)
+      message: remoteText(result.state_message, 300),
+      hostname: remoteText(result.hostname, 64)
     };
   } catch (e) {
     return { ok: false };
@@ -932,6 +1031,12 @@ function estimateRemainingSec(progressPercent, elapsedSec) {
 // Only fires leaving a busy (printing/paused) state for a terminal one, so
 // polling noise and the initial load (prevState === "") never notify.
 function notificationForTransition(prevState, nextState, printerName, filename, message) {
+  // Headline and body are rendered by the notification daemon, which may
+  // support markup; the filename and Klipper's message are remote input, and
+  // the printer name can be a Moonraker hostname the add form auto-filled.
+  printerName = plainForeignText(printerName, 64);
+  filename = plainForeignText(filename, 120);
+  message = plainForeignText(message, 200);
   // No previous state means this is the first reading after connecting, not a
   // transition: a printer that was already shut down when the shell started
   // should not announce itself.
@@ -995,7 +1100,11 @@ if (typeof module !== "undefined") {
     infoUrl: infoUrl,
     actionUrl: actionUrl,
     gcodeActionUrl: gcodeActionUrl,
-    apiKeyHeaderArgs: apiKeyHeaderArgs,
+    apiKeyOf: apiKeyOf,
+    curlApiKeyConfig: curlApiKeyConfig,
+    remoteText: remoteText,
+    plainForeignText: plainForeignText,
+    plainTooltip: plainTooltip,
     mediaBaseUrl: mediaBaseUrl,
     webcamsUrl: webcamsUrl,
     resolveWebcamUrl: resolveWebcamUrl,
@@ -1024,6 +1133,8 @@ if (typeof module !== "undefined") {
     isGcodePath: isGcodePath,
     relativeGcodePath: relativeGcodePath,
     metascanUrl: metascanUrl,
+    stateReadArgs: stateReadArgs,
+    stateWriteArgs: stateWriteArgs,
     inotifyArgs: inotifyArgs,
     catchUpArgs: catchUpArgs,
     parseMetascanResult: parseMetascanResult,

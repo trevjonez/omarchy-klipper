@@ -322,10 +322,8 @@ Item {
     // A large file on a Pi takes seconds to parse and Moonraker answers only
     // once it's done, so the timeout is generous and jobs run strictly one at
     // a time — metascan holds Moonraker's file-manager lock while it works.
-    scanProcess.command = ["curl", "-sS", "-X", "POST", "--max-time", "120", "-w", "\n%{http_code}"]
-      .concat(Model.apiKeyHeaderArgs(printer))
-      .concat([Model.metascanUrl(printer, job.relPath)])
-    scanProcess.running = true
+    scanProcess.run(["curl", "-sS", "-X", "POST", "--max-time", "120", "-w", "\n%{http_code}",
+                     Model.metascanUrl(printer, job.relPath)], printer)
   }
 
   function finishJob(result) {
@@ -345,10 +343,8 @@ Item {
     drain()
   }
 
-  Process {
+  ApiCurl {
     id: scanProcess
-    running: false
-    command: []
     stdout: StdioCollector { id: scanStdout; waitForEnd: true }
     onExited: function(exitCode) {
       // -w appends the status code as a final line after the response body.

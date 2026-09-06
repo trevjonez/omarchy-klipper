@@ -119,6 +119,7 @@ Item {
   }
 
   Text {
+    textFormat: Text.PlainText
     anchors.centerIn: parent
     visible: root.usingSnapshotFallback && !root.hasSnapshot
     text: root.snapshotUrl === "" ? "No camera feed" : "Loading camera…"
@@ -140,6 +141,7 @@ Item {
 
     Text {
       id: nameLabel
+      textFormat: Text.PlainText
       anchors.centerIn: parent
       text: root.cameraName
       color: root.foreground

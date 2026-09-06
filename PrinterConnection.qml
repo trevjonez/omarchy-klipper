@@ -207,16 +207,12 @@ Item {
   // is the normal case rather than an error worth reporting.
   function discoverPower() {
     if (!printer || powerProcess.running) return
-    powerProcess.command = ["curl", "-fsS", "--max-time", "5"]
-      .concat(Model.apiKeyHeaderArgs(printer))
-      .concat([Model.powerDevicesUrl(printer, schemeGuess)])
-    powerProcess.running = true
+    powerProcess.run(["curl", "-fsS", "--max-time", "5",
+                      Model.powerDevicesUrl(printer, schemeGuess)], printer)
   }
 
-  Process {
+  ApiCurl {
     id: powerProcess
-    running: false
-    command: []
     stdout: StdioCollector { id: powerStdout; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) return
@@ -269,16 +265,12 @@ Item {
   // once (e.g. on shell startup) don't contend for one shared process.
   function triggerAutoDiscover() {
     if (!printer || autoDiscoverProcess.running) return
-    autoDiscoverProcess.command = ["curl", "-fsS", "--max-time", "5"]
-      .concat(Model.apiKeyHeaderArgs(printer))
-      .concat([Model.objectsListUrl(printer, schemeGuess)])
-    autoDiscoverProcess.running = true
+    autoDiscoverProcess.run(["curl", "-fsS", "--max-time", "5",
+                             Model.objectsListUrl(printer, schemeGuess)], printer)
   }
 
-  Process {
+  ApiCurl {
     id: autoDiscoverProcess
-    running: false
-    command: []
     stdout: StdioCollector { id: autoDiscoverStdout; waitForEnd: true }
     onExited: function(exitCode) {
       var stdout = String(autoDiscoverStdout.text || "")

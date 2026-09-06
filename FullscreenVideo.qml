@@ -117,6 +117,7 @@ PanelWindow {
     spacing: Style.space(4)
 
     Text {
+      textFormat: Text.PlainText
       visible: root.shows("name")
       text: root.printer ? Model.printerDisplayName(root.printer) : ""
       color: Color.foreground
@@ -126,6 +127,7 @@ PanelWindow {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: root.shows("status")
       text: root.connection ? Model.stateLabel(root.connection.state) : ""
       color: {
@@ -139,6 +141,7 @@ PanelWindow {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: root.shows("filename") && root.connection && root.connection.filename !== ""
       text: root.connection ? root.connection.filename : ""
       color: Qt.darker(Color.foreground, 1.3)
@@ -157,6 +160,7 @@ PanelWindow {
 
       Text {
         id: progressLabel
+        textFormat: Text.PlainText
         text: (root.connection ? root.connection.progress : 0) + "%"
         color: Color.foreground
         font.family: Style.font.family
@@ -181,6 +185,7 @@ PanelWindow {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: root.shows("elapsed") && root.jobInProgress
       text: "Elapsed " + Model.formatDuration(root.connection ? root.connection.printDurationSec : 0)
       color: Qt.darker(Color.foreground, 1.3)
@@ -189,6 +194,7 @@ PanelWindow {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: root.shows("remaining") && root.jobInProgress
       text: {
         var c = root.connection
@@ -211,6 +217,7 @@ PanelWindow {
         model: root.shows("temps") && root.printer ? (root.printer.displaySensors || []) : []
 
         Text {
+          textFormat: Text.PlainText
           required property var modelData
           readonly property var reading: root.connection && root.connection.sensors
             ? root.connection.sensors[modelData.object] : null
@@ -225,6 +232,7 @@ PanelWindow {
   }
 
   Text {
+    textFormat: Text.PlainText
     anchors.horizontalCenter: parent.horizontalCenter
     anchors.bottom: parent.bottom
     anchors.bottomMargin: Style.space(18)

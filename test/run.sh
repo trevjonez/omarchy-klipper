@@ -48,7 +48,7 @@ if [[ $RUN_LINT -eq 1 ]]; then
   # ANY file declaring IpcHandler (reproducible in a two-line file), so linting
   # it would report a failure that says nothing. It is covered by the ui tier
   # and by loading it in the shell instead.
-  for f in CameraView.qml CameraWall.qml FullscreenVideo.qml GcodeWatcher.qml PrinterConnection.qml PrinterIcon.qml Service.qml; do
+  for f in ApiCurl.qml CameraView.qml CameraWall.qml FullscreenVideo.qml GcodeWatcher.qml PrinterConnection.qml PrinterIcon.qml Service.qml; do
     if qmllint -I /usr/share/omarchy/shell -I /usr/lib/qt6/qml "$f" >/dev/null 2>&1; then
       pass "qmllint $f"
     else
@@ -90,7 +90,7 @@ run_qml_test() {
     cp CameraView.qml PrinterIcon.qml Panel.qml FullscreenVideo.qml CameraWall.qml "$stage/"
   fi
 
-  cp Model.js PrinterConnection.qml GcodeWatcher.qml Service.qml "$stage/"
+  cp Model.js ApiCurl.qml PrinterConnection.qml GcodeWatcher.qml Service.qml "$stage/"
   cp test/qml/Harness.qml "$stage/"
   cp "$test_file" "$stage/"
   mkdir -p "$stage/home" "$stage/watch" "$stage/bin"

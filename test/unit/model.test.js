@@ -287,8 +287,74 @@ test('URL builders', () => {
   assert.equal(M.resolveWebcamUrl(p, '/webcam/?action=stream'), 'http://voron.lan/webcam/?action=stream');
   assert.equal(M.resolveWebcamUrl(p, 'http://cam.lan/s'), 'http://cam.lan/s', 'absolute url left alone');
 
-  assert.deepEqual(M.apiKeyHeaderArgs({ apiKey: '' }), []);
-  assert.deepEqual(M.apiKeyHeaderArgs({ apiKey: 'k' }), ['-H', 'X-Api-Key: k']);
+  assert.equal(M.apiKeyOf({ apiKey: '' }), '');
+  assert.equal(M.apiKeyOf({ apiKey: 'k' }), 'k');
+  assert.equal(M.apiKeyOf(null), '');
+});
+
+test('the api key travels on stdin, never in argv', () => {
+  // /proc/<pid>/cmdline is readable by other local users, so the key goes into
+  // a curl config on stdin instead of a -H argument.
+  assert.equal(M.curlApiKeyConfig(''), '', 'no key, no config, no --config -');
+  assert.equal(M.curlApiKeyConfig('secret'), 'header = "X-Api-Key: secret"\n');
+  // curl's config parser reads a double-quoted value with backslash escapes,
+  // so a key containing either has to survive the round trip as itself.
+  assert.equal(M.curlApiKeyConfig('a"b\\c'), 'header = "X-Api-Key: a\\"b\\\\c"\n');
+  // A newline would otherwise end the option and start a forged one.
+  assert.equal(M.curlApiKeyConfig('a\nheader = "X-Evil: 1"'),
+    'header = "X-Api-Key: a\\nheader = \\"X-Evil: 1\\""\n');
+});
+
+test('remote strings are bounded and stripped of control characters', () => {
+  assert.equal(M.remoteText('  spaced  ', 50), 'spaced');
+  assert.equal(M.remoteText('two\nlines', 50), 'two lines', 'a rendered value stays one line');
+  assert.equal(M.remoteText('a\u0000b', 50), 'a b');
+  const long = M.remoteText('x'.repeat(500), 64);
+  assert.equal(long.length, 64, 'bounded');
+  assert.ok(long.endsWith('\u2026'));
+  assert.equal(M.remoteText(null, 10), '');
+});
+
+test('strings handed to a foreign renderer cannot open a tag', () => {
+  // The bar tooltip and the notification daemon render text we do not own, so
+  // textFormat cannot be pinned there the way it is on our own Text items.
+  assert.equal(M.plainTooltip('<img src=x onerror=y> Voron'), 'img src=x onerror=y Voron');
+  assert.equal(M.plainTooltip('a & b'), 'a & b', 'an ampersand cannot start a tag');
+  assert.ok(M.plainTooltip('n'.repeat(400)).length <= 120);
+  const n = M.notificationForTransition('printing', 'complete', '<b>V</b>', '<img src=x>.gcode', '');
+  assert.ok(!/[<>]/.test(n.headline + n.body), n.headline + ' / ' + n.body);
+});
+
+test('the state file is kept private to its owner', () => {
+  const dir = '/home/u/.local/state/omarchy-klipper';
+  const file = dir + '/printers.json';
+  const read = M.stateReadArgs(dir, file);
+  assert.equal(read[0], 'sh');
+  // Paths are positional arguments, never interpolated into the script, so a
+  // $HOME with a quote or a space in it is still just a path.
+  assert.deepEqual(read.slice(-3), ['sh', dir, file]);
+  assert.ok(!read[2].includes('/home/u'), 'no path is baked into the script');
+
+  const script = read[2];
+  assert.ok(script.includes('install -d -m 700'), 'directory mode is what keeps other users out');
+  assert.ok(script.includes('[ -L "$dir" ] && exit 2'), 'install -d must not follow a symlinked dir');
+  // The verification and the read have to be the same object, or a swap
+  // between them decides what gets loaded: one open, then fstat/fchmod/read
+  // through that descriptor and never through the path again.
+  assert.ok(script.includes('exec 3< "$file"'), 'opened once');
+  assert.ok(script.includes('stat -Lc %F /proc/self/fd/3'), 'type checked on the descriptor');
+  assert.ok(script.includes('stat -Lc %u /proc/self/fd/3'), 'owner checked on the descriptor');
+  assert.ok(script.includes('chmod 600 /proc/self/fd/3'), 'mode fixed on the descriptor');
+  assert.ok(script.includes('cat <&3'), 'read from the same descriptor');
+  assert.ok(!/cat -- "\$file"|cat "\$file"/.test(script), 'never re-opened by path');
+
+  const write = M.stateWriteArgs(file);
+  assert.deepEqual(write.slice(-2), ['sh', file]);
+  const wscript = write[2];
+  // The content holds the API keys, so it arrives on stdin; argv is public.
+  assert.ok(!wscript.includes('printers'), 'no content in the script');
+  assert.ok(wscript.includes('umask 077'), 'created 0600, not tightened afterwards');
+  assert.ok(wscript.includes('mv -- "$tmp" "$file"'), 'replaced atomically');
 });
 
 test('snapshot cache-buster', () => {

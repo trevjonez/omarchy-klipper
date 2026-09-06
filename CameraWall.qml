@@ -85,6 +85,7 @@ PanelWindow {
 
     Text {
       id: headerLabel
+      textFormat: Text.PlainText
       anchors.left: parent.left
       text: root.tiles.length === 0
         ? "No cameras on any configured printer"
@@ -95,6 +96,7 @@ PanelWindow {
     }
 
     Text {
+      textFormat: Text.PlainText
       anchors.right: parent.right
       text: "Esc to close"
       color: Color.foreground
@@ -173,6 +175,7 @@ PanelWindow {
           spacing: Style.space(1)
 
           Text {
+            textFormat: Text.PlainText
             text: tile.modelData.cameraName === ""
               ? tile.modelData.printerName
               : tile.modelData.printerName + " · " + tile.modelData.cameraName
@@ -183,6 +186,7 @@ PanelWindow {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: {
               var c = tile.connection
               if (!c) return "Not connected"

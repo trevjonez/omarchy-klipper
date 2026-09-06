@@ -232,10 +232,8 @@ Item {
 
   function fetchWebcams() {
     if (!activePrinter || webcamsProcess.running) return
-    webcamsProcess.command = ["curl", "-fsS", "--max-time", "4"]
-      .concat(Model.apiKeyHeaderArgs(activePrinter))
-      .concat([Model.webcamsUrl(activePrinter, preferredScheme(activePrinter))])
-    webcamsProcess.running = true
+    webcamsProcess.run(["curl", "-fsS", "--max-time", "4",
+                        Model.webcamsUrl(activePrinter, preferredScheme(activePrinter))], activePrinter)
   }
 
   Timer {
@@ -248,10 +246,8 @@ Item {
     onTriggered: root.fetchWebcams()
   }
 
-  Process {
+  ApiCurl {
     id: webcamsProcess
-    running: false
-    command: []
     stdout: StdioCollector { id: webcamsStdout; waitForEnd: true }
     stderr: StdioCollector { id: webcamsStderr; waitForEnd: true }
     onExited: function(exitCode) {
@@ -318,10 +314,7 @@ Item {
   function runAction(url, label) {
     if (!activePrinter || actionProcess.running) return
     actionStatus = label || ""
-    actionProcess.command = ["curl", "-fsS", "--max-time", "5", "-X", "POST"]
-      .concat(Model.apiKeyHeaderArgs(activePrinter))
-      .concat([url])
-    actionProcess.running = true
+    actionProcess.run(["curl", "-fsS", "--max-time", "5", "-X", "POST", url], activePrinter)
   }
 
   function togglePauseResume() {
@@ -368,10 +361,8 @@ Item {
     confirmTimer.stop()
   }
 
-  Process {
+  ApiCurl {
     id: actionProcess
-    running: false
-    command: []
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
     onExited: function(exitCode) {
@@ -400,10 +391,8 @@ Item {
     editDiscoveryLoading = true
     editDiscoveryHeaters = []
     editDiscoverySensors = []
-    discoverProcess.command = ["curl", "-fsS", "--max-time", "5"]
-      .concat(Model.apiKeyHeaderArgs(printer))
-      .concat([Model.objectsListUrl(printer, preferredScheme(printer))])
-    discoverProcess.running = true
+    discoverProcess.run(["curl", "-fsS", "--max-time", "5",
+                         Model.objectsListUrl(printer, preferredScheme(printer))], printer)
   }
 
   function clearEditDiscovery() {
@@ -413,10 +402,8 @@ Item {
     discoverProcess.running = false
   }
 
-  Process {
+  ApiCurl {
     id: discoverProcess
-    running: false
-    command: []
     stdout: StdioCollector { id: discoverStdout; waitForEnd: true }
     onExited: function(exitCode) {
       root.editDiscoveryLoading = false
@@ -512,11 +499,17 @@ Item {
   }
 
   function persistPrinters() {
-    printersFile.setText(Model.serializePrinters({
+    // Whatever is at that path failed the ownership/type check, so it is not
+    // ours to overwrite -- and writing would create a second copy of the API
+    // keys next to a file we already refused to trust.
+    if (stateError !== "") return
+    _stateRevision++
+    _pendingState = Model.serializePrinters({
       activePrinterId: activePrinterId,
       printers: printers,
       settings: appSettings
-    }))
+    })
+    flushState()
   }
 
   // ---------------------------------------------------------------- test connection
@@ -562,16 +555,12 @@ Item {
       return
     }
     _testCurrentScheme = _testSchemeQueue.shift()
-    testProcess.command = ["curl", "-fsS", "--max-time", "4"]
-      .concat(Model.apiKeyHeaderArgs(_testFields))
-      .concat([Model.infoUrl(_testFields, _testCurrentScheme)])
-    testProcess.running = true
+    testProcess.run(["curl", "-fsS", "--max-time", "4",
+                     Model.infoUrl(_testFields, _testCurrentScheme)], _testFields)
   }
 
-  Process {
+  ApiCurl {
     id: testProcess
-    running: false
-    command: []
     stdout: StdioCollector { id: testStdout; waitForEnd: true }
     stderr: StdioCollector { id: testStderr; waitForEnd: true }
     onExited: function(exitCode) {
@@ -601,21 +590,99 @@ Item {
     fetchWebcams()
   }
 
+  // The state file carries each printer's Moonraker API key, so it is read and
+  // written by two small scripts rather than by FileView: the read verifies the
+  // file through the descriptor it then reads from, and the write creates the
+  // replacement 0600 with the content on stdin, never in argv. See
+  // Model.stateReadArgs / stateWriteArgs for what each one checks and why.
+  // FileView stays on as the change watcher only -- it never reads or writes.
+  readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy-klipper"
+  readonly property string statePath: stateDir + "/printers.json"
+  // Non-empty when that path is not something we are willing to read. Nothing
+  // is loaded and nothing is written while it is set: whatever is there is not
+  // ours, so replacing it would destroy someone else's file and put a second
+  // copy of the API keys somewhere we already refused to trust.
+  property string stateError: ""
+
+  // Newest content not yet written, and the content of the write in flight.
+  // Saves arrive in bursts (add, select, persist a discovered scheme) and one
+  // process carries one write, so the newest content waits its turn rather
+  // than racing the one ahead of it.
+  property string _pendingState: ""
+  property string _writingState: ""
+
+  // Bumped by every local change, and sampled when a read starts. A read is
+  // asynchronous, so a printer added while one is in flight is newer than
+  // whatever that read returns -- applying the file then would silently undo
+  // the add. The revisions differing is exactly that case.
+  property int _stateRevision: 0
+  property int _readRevision: 0
+
+  function reloadState() {
+    if (stateReadProcess.running) return
+    _readRevision = _stateRevision
+    stateReadProcess.running = true
+  }
+
+  function flushState() {
+    if (_pendingState === "" || stateWriteProcess.running) return
+    _writingState = _pendingState
+    _pendingState = ""
+    stateWriteProcess.stdinEnabled = true
+    stateWriteProcess.running = true
+  }
+
   Process {
-    id: ensureDirProcess
-    command: ["mkdir", "-p", Quickshell.env("HOME") + "/.local/state/omarchy-klipper"]
+    id: stateReadProcess
+    command: Model.stateReadArgs(root.stateDir, root.statePath)
     running: true
-    onExited: printersFile.reload()
+    stdout: StdioCollector { id: stateStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      // 3 is "no file yet", which is what a fresh install looks like.
+      root.stateError = exitCode === 0 || exitCode === 3 ? ""
+        : exitCode === 2
+          ? "Refusing to read " + root.statePath + ": not a regular file owned by you"
+          : "Could not secure " + root.stateDir + " (needs to be a directory you own, mode 700)"
+
+      // Something changed while this read was running, so what came back is
+      // already stale and is queued to be overwritten by it.
+      if (root._stateRevision !== root._readRevision) return
+
+      root.applyPrintersState(Model.parsePrinters(exitCode === 0 ? String(stateStdout.text || "") : ""))
+    }
+  }
+
+  Process {
+    id: stateWriteProcess
+    command: Model.stateWriteArgs(root.statePath)
+    running: false
+    stdinEnabled: false
+    onStarted: {
+      write(root._writingState)
+      // The script writes until EOF, so stdin has to be closed for the rename
+      // to happen at all.
+      stdinEnabled = false
+    }
+    onExited: function(exitCode) {
+      root._writingState = ""
+      if (exitCode === 2) root.stateError = "Refusing to write " + root.statePath + ": not a path we own"
+      root.flushState()
+    }
   }
 
   FileView {
+    // Watcher only: never loaded, never written through. It exists so a state
+    // file changed from outside (a hand edit) still reaches the panel, and the
+    // re-read goes through the same verified path as the first one.
     id: printersFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy-klipper/printers.json"
+    path: root.statePath
     watchChanges: true
-    atomicWrites: true
     printErrors: false
-    onLoaded: root.applyPrintersState(Model.parsePrinters(text()))
-    onLoadFailed: root.applyPrintersState(Model.parsePrinters(""))
-    onFileChanged: reload()
+    onFileChanged: {
+      // Our own write lands here too; re-reading what we just wrote is
+      // harmless but pointless, and mid-write it would read the old content.
+      if (stateWriteProcess.running || root._pendingState !== "") return
+      root.reloadState()
+    }
   }
 }

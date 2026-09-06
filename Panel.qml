@@ -252,7 +252,13 @@ Panel {
     objectName: "barPill"
     bar: root.bar
     iconComponent: iconComp
-    tooltipText: printer.activePrinter ? (printer.printerName + " — " + printer.stateLabel()) : "Klipper — no printer configured"
+    // This string is rendered by the shell, not by us, so its textFormat is
+    // not ours to pin -- and the printer name can come straight from a
+    // Moonraker hostname (the add form auto-fills it from a connection test).
+    // plainTooltip leaves nothing for a rich-text renderer to act on.
+    tooltipText: printer.activePrinter
+      ? Model.plainTooltip(printer.printerName + " — " + printer.stateLabel())
+      : "Klipper — no printer configured"
 
     onPressed: function(b) {
       // Each button toggles its own view and dismisses the others, so the
@@ -400,6 +406,7 @@ Panel {
                   }
 
                   Text {
+                    textFormat: Text.PlainText
                     text: Model.printerDisplayName(switcherRow.modelData)
                     color: root.foreground
                     font.family: root.fontFamily
@@ -459,6 +466,7 @@ Panel {
                 spacing: Style.space(8)
 
                 Text {
+                  textFormat: Text.PlainText
                   text: "+"
                   color: Color.accent
                   font.family: root.fontFamily
@@ -467,6 +475,7 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
+                  textFormat: Text.PlainText
                   text: "Add printer"
                   color: Color.accent
                   font.family: root.fontFamily
@@ -492,9 +501,23 @@ Panel {
             opacity: 0.12
           }
 
+          // A state file we refused to read is not an empty configuration --
+          // saying so beats silently showing "no printers" over the top of one.
+          Text {
+            visible: printer.stateError !== ""
+            width: parent.width - parent.leftPadding - parent.rightPadding
+            text: printer.stateError
+            color: Color.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+          }
+
           // ---- empty state ----
           Text {
-            visible: printer.printers.length === 0 && !root.addingPrinter
+            textFormat: Text.PlainText
+            visible: printer.printers.length === 0 && !root.addingPrinter && printer.stateError === ""
             width: parent.width - parent.leftPadding - parent.rightPadding
             text: "No printers configured yet."
             color: root.dim
@@ -509,6 +532,7 @@ Panel {
             spacing: Style.space(8)
 
             Text {
+              textFormat: Text.PlainText
               visible: printer.printers.length > 1
               text: printer.printerName
               color: root.dim
@@ -518,6 +542,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               text: printer.state === "" ? "Checking…" : printer.stateLabel()
               color: root.iconColor
               font.family: root.fontFamily
@@ -526,6 +551,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               visible: printer.filename !== ""
               text: printer.filename
               color: root.foreground
@@ -560,18 +586,21 @@ Panel {
               spacing: Style.space(16)
 
               Text {
+                textFormat: Text.PlainText
                 text: printer.progress + "%"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
               }
               Text {
+                textFormat: Text.PlainText
                 text: "Elapsed " + printer.formatDuration(printer.printDurationSec)
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
               }
               Text {
+                textFormat: Text.PlainText
                 visible: printer.hasRemainingEstimate
                 text: "ETA " + printer.formatDuration(printer.remainingSec)
                 color: root.dim
@@ -581,6 +610,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               visible: printer.message !== ""
               text: printer.message
               color: root.dim
@@ -602,6 +632,7 @@ Panel {
                   required property var modelData
                   spacing: Style.space(2)
                   Text {
+                    textFormat: Text.PlainText
                     text: Model.sensorFieldLabel(modelData.object, modelData.field).toUpperCase()
                     color: root.dim
                     font.family: root.fontFamily
@@ -609,6 +640,7 @@ Panel {
                     font.letterSpacing: 1
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: Model.formatSensorEntry(printer.sensors[modelData.object], modelData.field)
                     color: root.foreground
                     font.family: root.fontFamily
@@ -651,6 +683,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               visible: printer.actionStatus !== ""
               text: printer.actionStatus
               color: printer.pendingConfirm !== "" ? Color.urgent : root.dim
@@ -719,6 +752,7 @@ Panel {
             spacing: Style.space(8)
 
             Text {
+              textFormat: Text.PlainText
               text: root.editingPrinterId !== "" ? "Edit printer" : "Add printer"
               color: root.foreground
               font.family: root.fontFamily
@@ -743,6 +777,7 @@ Panel {
               Keys.onEscapePressed: root.cancelEditPrinter()
             }
             Text {
+              textFormat: Text.PlainText
               text: "Plain host tries http then https automatically; paste a full https://… URL to pin one."
               color: root.dim
               font.family: root.fontFamily
@@ -777,6 +812,7 @@ Panel {
               spacing: Style.space(6)
 
               Text {
+                textFormat: Text.PlainText
                 text: "Sensors to display"
                 color: root.foreground
                 font.family: root.fontFamily
@@ -784,6 +820,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: printer.editDiscoveryLoading
                 text: "Checking what this printer has…"
                 color: root.dim
@@ -792,6 +829,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: !printer.editDiscoveryLoading && printer.editDiscoveryHeaters.length === 0 && printer.editDiscoverySensors.length === 0
                 text: "Could not read this printer's sensors — make sure it's reachable, then reopen Edit."
                 color: root.dim
@@ -802,6 +840,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: printer.editDiscoveryHeaters.length > 0
                 text: "HEATERS"
                 color: root.dim
@@ -835,6 +874,7 @@ Panel {
                       border.color: root.isSensorSelected(heaterRow.modelData, "") ? Color.accent : Qt.darker(root.foreground, 1.6)
                     }
                     Text {
+                      textFormat: Text.PlainText
                       text: Model.sensorLabel(heaterRow.modelData)
                       color: root.foreground
                       font.family: root.fontFamily
@@ -852,6 +892,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: printer.editDiscoverySensors.length > 0
                 text: "OTHER SENSORS"
                 color: root.dim
@@ -888,6 +929,7 @@ Panel {
                       border.color: root.isSensorSelected(sensorRow.modelData.object, sensorRow.modelData.field) ? Color.accent : Qt.darker(root.foreground, 1.6)
                     }
                     Text {
+                      textFormat: Text.PlainText
                       text: Model.sensorFieldLabel(sensorRow.modelData.object, sensorRow.modelData.field)
                       color: root.foreground
                       font.family: root.fontFamily
@@ -914,6 +956,7 @@ Panel {
               spacing: Style.space(6)
 
               Text {
+                textFormat: Text.PlainText
                 text: "Fullscreen video overlays"
                 color: root.foreground
                 font.family: root.fontFamily
@@ -921,6 +964,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 text: "Drawn over this printer's camera when opened fullscreen."
                 color: root.dim
                 font.family: root.fontFamily
@@ -954,6 +998,7 @@ Panel {
                       border.color: root.isOverlaySelected(overlayRow.modelData.key) ? Color.accent : Qt.darker(root.foreground, 1.6)
                     }
                     Text {
+                      textFormat: Text.PlainText
                       text: overlayRow.modelData.label
                       color: root.foreground
                       font.family: root.fontFamily
@@ -972,6 +1017,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               visible: printer.testStatus !== ""
               text: printer.testStatus
               color: printer.testing ? root.dim : (printer.testSuccess ? Color.accent : Color.urgent)
@@ -1116,6 +1162,7 @@ Panel {
         rightPadding: Style.space(16)
 
         Text {
+          textFormat: Text.PlainText
           text: "Klipper settings"
           color: root.foreground
           font.family: root.fontFamily
@@ -1127,6 +1174,7 @@ Panel {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             text: "G-CODE WATCH FOLDER"
             color: root.dim
             font.family: root.fontFamily
@@ -1135,6 +1183,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: "When a printer reads G-code from a network share, a file written from another machine never reaches its file watcher, so Moonraker never parses the metadata. Point this at that share and new files get scanned on every reachable printer."
             color: root.dim
             font.family: root.fontFamily
@@ -1185,6 +1234,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: printer.watcher.status
             color: printer.watcher.failed ? Color.urgent : root.dim
             font.family: root.fontFamily
@@ -1208,6 +1258,7 @@ Panel {
           visible: printer.watcher.activity.length > 0
 
           Text {
+            textFormat: Text.PlainText
             text: "RECENT SCANS"
             color: root.dim
             font.family: root.fontFamily
@@ -1229,6 +1280,7 @@ Panel {
               bottomPadding: Style.space(6)
 
               Text {
+                textFormat: Text.PlainText
                 visible: modelData.file !== ""
                 text: modelData.at + "  " + modelData.file
                 color: root.foreground
@@ -1239,6 +1291,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: modelData.note !== ""
                 text: modelData.note
                 color: root.dim
@@ -1257,18 +1310,21 @@ Panel {
                   leftPadding: Style.space(4)
 
                   Text {
+                    textFormat: Text.PlainText
                     text: root.scanGlyph(parent.modelData.state)
                     color: root.scanColor(parent.modelData.state)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: parent.modelData.name
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: root.scanLabel(parent.modelData.state)
                     color: root.scanColor(parent.modelData.state)
                     font.family: root.fontFamily
@@ -1346,12 +1402,14 @@ Panel {
         spacing: Style.space(2)
 
         Text {
+          textFormat: Text.PlainText
           text: check.label
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }
         Text {
+          textFormat: Text.PlainText
           visible: check.description !== ""
           text: check.description
           color: root.dim
@@ -1390,6 +1448,7 @@ Panel {
 
     Text {
       id: label
+      textFormat: Text.PlainText
       anchors.centerIn: parent
       text: btn.buttonText
       color: btn.urgent ? Color.urgent : root.foreground

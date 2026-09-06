@@ -153,7 +153,12 @@ function setKlippyState(next) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  log({ kind: 'http', method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams) });
+  // The API key is logged so a test can prove it arrived as a header --
+  // which is the only externally visible evidence that curl read it off
+  // stdin rather than out of its own argv.
+  log({ kind: 'http', method: req.method, path: url.pathname,
+        query: Object.fromEntries(url.searchParams),
+        apiKey: req.headers['x-api-key'] || '' });
 
   const json = (code, body) => {
     res.writeHead(code, { 'Content-Type': 'application/json' });
