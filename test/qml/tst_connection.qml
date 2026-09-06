@@ -81,7 +81,14 @@ ShellRoot {
         h.checkEq("snapshot sensors survive a delta", still ? still.temperature : null, 210.4)
         h.check("unpinned printer gets its scheme recorded", root.service.schemePins >= 1,
                 "pinPrinterScheme calls: " + root.service.schemePins)
-        h.done()
+
+        // Host CPU/RAM rides the same socket, pushed without a subscription.
+        h.waitFor("host stats arrive unasked", function() { return conn.hasHostStats }, function() {
+          h.checkEq("cpu is the host, not moonraker's own process", conn.hostCpuPercent, 42)
+          h.checkEq("memory used", conn.hostMemUsedKb, 1100000)
+          h.checkEq("memory total", conn.hostMemTotalKb, 3999000)
+          h.done()
+        })
       })
     })
   }

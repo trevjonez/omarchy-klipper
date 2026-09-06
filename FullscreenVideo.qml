@@ -206,6 +206,18 @@ PanelWindow {
       font.pixelSize: Style.font.bodySmall
     }
 
+    HostStats {
+      // Same fixed width as the progress bar above, so the card keeps one
+      // edge rather than growing to whatever the numbers happen to be.
+      visible: root.shows("host")
+      width: Style.space(220)
+      cpuPercent: root.shows("host") && root.connection ? root.connection.hostCpuPercent : -1
+      memUsedKb: root.connection ? root.connection.hostMemUsedKb : -1
+      memTotalKb: root.shows("host") && root.connection ? root.connection.hostMemTotalKb : -1
+      valueSize: Style.font.caption
+      dim: Qt.darker(Color.foreground, 1.3)
+    }
+
     // The same selection the popup shows, so the fullscreen view doesn't need
     // its own sensor picker.
     Flow {

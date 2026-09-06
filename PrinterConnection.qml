@@ -90,6 +90,11 @@ Item {
     filename = ""
     printDurationSec = 0
     sensors = {}
+    // The host is unreachable, so its last CPU/RAM reading says nothing about
+    // it now -- the machine may well be off.
+    hostCpuPercent = -1
+    hostMemUsedKb = -1
+    hostMemTotalKb = -1
   }
 
   function applyStatus(extracted) {
@@ -183,6 +188,14 @@ Item {
         return
       }
 
+      // Host CPU/RAM. Moonraker pushes this once a second to every open
+      // socket without being asked, so it costs nothing but the parse.
+      var proc = Model.parseProcStats(message)
+      if (proc) {
+        root.applyProcStats(proc)
+        return
+      }
+
       var lifecycle = Model.parseKlippyLifecycle(message)
       if (lifecycle !== null) {
         root.onKlippyLifecycle(lifecycle)
@@ -195,6 +208,19 @@ Item {
         root.applyStatus(Model.extractStatus(root._rawStatus, root.sensorObjectNames))
       }
     }
+  }
+
+  // Host stats for the machine Moonraker runs on -- not the printer, and not
+  // Moonraker's own process. -1 means this host does not report that one.
+  property int hostCpuPercent: -1
+  property int hostMemUsedKb: -1
+  property int hostMemTotalKb: -1
+  readonly property bool hasHostStats: hostCpuPercent >= 0 || hostMemTotalKb > 0
+
+  function applyProcStats(stats) {
+    hostCpuPercent = stats.cpuPercent
+    hostMemUsedKb = stats.memUsedKb
+    hostMemTotalKb = stats.memTotalKb
   }
 
   function applyPowerDevice(device) {

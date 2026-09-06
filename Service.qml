@@ -118,6 +118,12 @@ Item {
   readonly property int remainingSec: Model.estimateRemainingSec(progress, printDurationSec) || 0
   readonly property bool hasRemainingEstimate: Model.estimateRemainingSec(progress, printDurationSec) !== null
 
+  // ---- host stats (the machine Moonraker runs on) --------------------------
+  readonly property bool hasHostStats: activeConnection ? activeConnection.hasHostStats : false
+  readonly property int hostCpuPercent: activeConnection ? activeConnection.hostCpuPercent : -1
+  readonly property int hostMemUsedKb: activeConnection ? activeConnection.hostMemUsedKb : -1
+  readonly property int hostMemTotalKb: activeConnection ? activeConnection.hostMemTotalKb : -1
+
   // ---- power (Moonraker's optional [power] component) ----------------------
   readonly property bool hasPowerControl: activeConnection ? activeConnection.hasPowerControl : false
   readonly property string powerStatus: activeConnection ? activeConnection.powerStatus : ""

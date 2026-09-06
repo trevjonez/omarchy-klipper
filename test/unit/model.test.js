@@ -532,6 +532,48 @@ test('durations and remaining-time estimate', () => {
   assert.equal(M.estimateRemainingSec(50, 0), null);
 });
 
+test('host cpu/ram come from the system fields, not moonraker\'s own process', () => {
+  const frame = (stats) => JSON.stringify({
+    jsonrpc: '2.0', method: 'notify_proc_stat_update', params: [stats],
+  });
+  const full = M.parseProcStats(frame({
+    // A few percent of one Python process, which is not what "CPU" means here.
+    moonraker_stats: { time: 1, cpu_usage: 3.2, memory: 52000, mem_units: 'kB' },
+    system_cpu_usage: { cpu: 41.7, cpu0: 50.1 },
+    system_memory: { total: 3999000, available: 2600000, used: 1100000 },
+  }));
+  assert.equal(full.cpuPercent, 42, 'the host total, rounded');
+  assert.equal(full.memUsedKb, 1100000);
+  assert.equal(full.memTotalKb, 3999000);
+
+  // Another push on the same socket is not this one.
+  assert.equal(M.parseProcStats(JSON.stringify({ method: 'notify_status_update', params: [{}] })), null);
+  assert.equal(M.parseProcStats('not json'), null);
+
+  // An older Moonraker, or a host that reports neither: nothing to show, and
+  // returning null leaves the last good reading alone.
+  assert.equal(M.parseProcStats(frame({ moonraker_stats: { cpu_usage: 3.2 } })), null);
+  // One of the two missing is still an update.
+  const cpuOnly = M.parseProcStats(frame({ system_cpu_usage: { cpu: 12 } }));
+  assert.equal(cpuOnly.cpuPercent, 12);
+  assert.equal(cpuOnly.memTotalKb, -1, 'unknown, not zero');
+  // Out-of-range readings are clamped rather than drawn past the end of a bar.
+  assert.equal(M.parseProcStats(frame({ system_cpu_usage: { cpu: 140 } })).cpuPercent, 100);
+});
+
+test('host memory is formatted and scaled for a bar', () => {
+  assert.equal(M.formatMemory(3999000), '3.8 GB');
+  assert.equal(M.formatMemory(52000), '51 MB');
+  assert.equal(M.formatMemory(800), '800 kB');
+  assert.equal(M.formatMemory(-1), '', 'unknown shows nothing at all');
+  // Against total: used and Moonraker's "available" overlap, so used/available
+  // could exceed 1 and draw past the end of the track.
+  assert.equal(M.memoryFraction(1100000, 3999000).toFixed(3), '0.275');
+  assert.equal(M.memoryFraction(5000, 1000), 1, 'clamped');
+  assert.equal(M.memoryFraction(-1, 1000), 0);
+  assert.equal(M.memoryFraction(500, 0), 0, 'no total, no bar');
+});
+
 test('notificationArgs replaces a printer\'s previous toast when it has an id', () => {
   const n = { urgency: 'normal', headline: 'Voron: print complete', body: 'a.gcode finished' };
   assert.deepEqual(M.notificationArgs(n, 0),

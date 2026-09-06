@@ -620,6 +620,18 @@ Panel {
               width: parent.width
             }
 
+            // The host Moonraker runs on, under the printer's own readings:
+            // it is context for them, not a headline of its own.
+            HostStats {
+              width: parent.width
+              cpuPercent: printer.hostCpuPercent
+              memUsedKb: printer.hostMemUsedKb
+              memTotalKb: printer.hostMemTotalKb
+              foreground: root.foreground
+              dim: root.dim
+              fontFamily: root.fontFamily
+            }
+
             Flow {
               width: parent.width
               spacing: Style.space(20)

@@ -32,6 +32,14 @@ const cfg = {
   dropAfterMs: Number(process.env.MOCK_DROP_AFTER_MS || 0),
   klippyState: process.env.MOCK_KLIPPY_STATE || 'ready',
   klippyMessage: process.env.MOCK_KLIPPY_MESSAGE || 'Emergency stop',
+  // Host CPU/RAM, which Moonraker pushes to every open socket once a second
+  // without being subscribed to. Faster here so a test isn't sitting waiting
+  // for a second to pass.
+  procStatsMs: Number(process.env.MOCK_PROC_STATS_MS || 250),
+  cpuUsage: Number(process.env.MOCK_CPU_USAGE || 41.7),
+  memTotal: Number(process.env.MOCK_MEM_TOTAL || 3999000),
+  memAvailable: Number(process.env.MOCK_MEM_AVAILABLE || 2600000),
+  memUsed: Number(process.env.MOCK_MEM_USED || 1100000),
   objects: (process.env.MOCK_OBJECTS ||
     'webhooks,print_stats,display_status,virtual_sdcard,extruder,heater_bed,heater_generic drybox,bme280 Chamber,temperature_sensor Ambient').split(','),
 };
@@ -129,6 +137,24 @@ function pushStatus(patch) {
   }));
   // Only to sockets that actually hold a subscription.
   for (const s of subscribed) { try { s.write(frame); } catch (e) { /* peer gone */ } }
+}
+
+// moonraker_stats is included because the real frame carries it: it is
+// Moonraker's own process, and a client that mistook it for the host would
+// read a few percent of one Python process as the whole machine.
+function pushProcStats() {
+  broadcast({
+    jsonrpc: '2.0',
+    method: 'notify_proc_stat_update',
+    params: [{
+      moonraker_stats: { time: Date.now() / 1000, cpu_usage: 3.2, memory: 52000, mem_units: 'kB' },
+      cpu_temp: 48.2,
+      system_cpu_usage: { cpu: cfg.cpuUsage, cpu0: cfg.cpuUsage, cpu1: cfg.cpuUsage },
+      system_memory: { total: cfg.memTotal, available: cfg.memAvailable, used: cfg.memUsed },
+      system_uptime: 12345.6,
+      websocket_connections: sockets.size,
+    }],
+  });
 }
 
 function setKlippyState(next) {
@@ -252,3 +278,6 @@ server.listen(Number(process.env.MOCK_PORT || 0), '127.0.0.1', () => {
   // First stdout line is the port, so callers can bind :0 and read it back.
   console.log(String(server.address().port));
 });
+
+// unref'd so this timer alone never keeps the mock alive after a test ends.
+if (cfg.procStatsMs > 0) setInterval(pushProcStats, cfg.procStatsMs).unref();

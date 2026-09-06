@@ -139,7 +139,8 @@ var VIDEO_OVERLAY_FIELDS = [
   { key: "progress", label: "Progress" },
   { key: "elapsed", label: "Elapsed time" },
   { key: "remaining", label: "Time remaining" },
-  { key: "temps", label: "Temperatures" }
+  { key: "temps", label: "Temperatures" },
+  { key: "host", label: "Host CPU / RAM" }
 ];
 
 // Enough to identify the feed and see how the job is going, without covering
@@ -872,6 +873,65 @@ function mergeStatusObjects(current, delta) {
 // freezes on the last state seen before the shutdown -- an emergency stop
 // followed by a firmware restart would leave it reading "Klipper shut down"
 // forever.
+// ---------------------------------------------------------------- host stats
+
+// Moonraker watches the machine it runs on and pushes a proc_stats frame to
+// every open websocket about once a second, with no subscription needed --
+// unlike printer objects, which have to be asked for.
+//
+// system_cpu_usage/system_memory are the whole host; moonraker_stats in the
+// same frame is Moonraker's own process and is deliberately ignored, since a
+// bar labelled "CPU" that tracked one Python process would be a lie.
+function parseProcStats(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""));
+    if (!isPlainObject(data) || data.method !== "notify_proc_stat_update") return null;
+    return normalizeProcStats(Array.isArray(data.params) ? data.params[0] : null);
+  } catch (e) {
+    return null;
+  }
+}
+
+// -1 means "this host does not report it" rather than zero, which is a real
+// reading; the panel hides what it cannot show instead of drawing an empty bar.
+function normalizeProcStats(stats) {
+  if (!isPlainObject(stats)) return null;
+  var cpu = isPlainObject(stats.system_cpu_usage) ? Number(stats.system_cpu_usage.cpu) : NaN;
+  var mem = isPlainObject(stats.system_memory) ? stats.system_memory : {};
+  var out = {
+    cpuPercent: isFinite(cpu) ? Math.max(0, Math.min(100, Math.round(cpu))) : -1,
+    memUsedKb: kilobytesOrUnknown(mem.used),
+    memTotalKb: kilobytesOrUnknown(mem.total)
+  };
+  // An older Moonraker, or a platform where neither could be read, is not an
+  // update -- returning null leaves the last good reading on screen.
+  if (out.cpuPercent < 0 && out.memTotalKb < 0) return null;
+  return out;
+}
+
+function kilobytesOrUnknown(value) {
+  var n = Number(value);
+  return isFinite(n) && n >= 0 ? n : -1;
+}
+
+// Moonraker reports memory in kilobytes. One decimal at GB and none below
+// keeps the width steady as the number moves, which matters for a value that
+// updates once a second.
+function formatMemory(kb) {
+  if (!isFinite(kb) || kb < 0) return "";
+  if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB";
+  if (kb >= 1024) return Math.round(kb / 1024) + " MB";
+  return Math.round(kb) + " kB";
+}
+
+// Against total, not against Moonraker's "available": the two overlap, since
+// available counts cache the kernel would hand back on demand, so used/total
+// is the only ratio that stays inside 0..1.
+function memoryFraction(usedKb, totalKb) {
+  if (!(usedKb >= 0) || !(totalKb > 0)) return 0;
+  return Math.max(0, Math.min(1, usedKb / totalKb));
+}
+
 // Moonraker answers printer.objects.subscribe with an error while Klippy is
 // down -- which is exactly the situation when the printer is switched off at
 // the wall. Recognising it keeps the connection usable (Moonraker itself is
@@ -1154,6 +1214,10 @@ if (typeof module !== "undefined") {
     parseNotifyStatusUpdate: parseNotifyStatusUpdate,
     parseKlippyLifecycle: parseKlippyLifecycle,
     parseSubscribeError: parseSubscribeError,
+    parseProcStats: parseProcStats,
+    normalizeProcStats: normalizeProcStats,
+    formatMemory: formatMemory,
+    memoryFraction: memoryFraction,
     subscribeRequestJson: subscribeRequestJson,
     parseSubscribeResponse: parseSubscribeResponse,
     websocketUrl: websocketUrl,
