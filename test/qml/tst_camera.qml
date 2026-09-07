@@ -52,6 +52,7 @@ ShellRoot {
     width: 320
     active: false
     preferSnapshots: true
+    showFps: true
     streamUrl: "http://127.0.0.1:" + root.mockPort + "/webcam/?action=stream"
     snapshotUrl: "http://127.0.0.1:" + root.mockPort + "/webcam/?action=snapshot"
   }
@@ -99,12 +100,22 @@ ShellRoot {
     id: adaptiveTimer
     interval: 2000
     onTriggered: {
+      // Decoded, not merely fetched: a corrupt fixture would keep the poll
+      // loop turning through the error path and leave every count above
+      // passing for the wrong reason.
+      h.check("frames actually decoded", adaptive.hasSnapshot, "hasSnapshot = " + adaptive.hasSnapshot)
+      var drawn = adaptive.renderedFps
       adaptive.active = false
+      h.checkEq("a closed feed reports no rate", adaptive.renderedFps, 0)
       root.refreshCount()
       h.waitFor("adaptive count read back", function() { return !counter.running }, function() {
         var pulled = root.snapshots - root.adaptiveBaseline
         h.check("an adaptive camera pulls frames far faster than the fallback", pulled >= 5,
                 "pulled " + pulled + " in 2s")
+        // The readout counts frames actually put on screen, so it should have
+        // seen the same traffic the mock served.
+        h.check("the fps readout reports what was drawn", drawn >= 1,
+                "renderedFps while open = " + drawn)
         h.done()
       })
     }

@@ -53,6 +53,17 @@ Item {
   property bool retryingVideo: false
   // Which of the two snapshot images is currently on screen.
   property bool frontIsA: true
+  // Draws a frame-rate readout over the picture. Off for the popup, whose
+  // feed is small and incidental; on where someone is actually watching.
+  property bool showFps: false
+  // Frames put on screen in the last second -- what is being drawn, which is
+  // not the camera's configured rate: a snapshot feed runs as fast as the
+  // link and the decoder allow, by design.
+  readonly property alias renderedFps: root._fps
+  property int _fps: 0
+  property int _framesThisSecond: 0
+
+  function noteFrame() { _framesThisSecond++ }
 
   // Loads into whichever image is hidden, and shows it only once it has
   // decoded. A single Image whose source changes goes blank while the
@@ -78,6 +89,7 @@ Item {
   function presentSnapshot(isA) {
     frontIsA = isA
     hasSnapshot = true
+    noteFrame()
   }
 
   height: width * aspectRatio
@@ -87,6 +99,8 @@ Item {
     if (!active) {
       retryingVideo = false
       videoReady = false
+      _fps = 0
+      _framesThisSecond = 0
       player.stop()
       return
     }
@@ -142,6 +156,12 @@ Item {
       fillMode: VideoOutput.PreserveAspectFit
     }
 
+    Connections {
+      target: videoOutput.videoSink
+      enabled: root.showFps && !root.usingSnapshotFallback
+      function onVideoFrameChanged(frame) { root.noteFrame() }
+    }
+
     Image {
       id: snapshotA
       anchors.fill: parent
@@ -177,6 +197,28 @@ Item {
     color: root.foreground
     font.family: root.fontFamily
     opacity: 0.7
+  }
+
+  Rectangle {
+    visible: root.showFps && root.renderedFps > 0
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    anchors.margins: Style.space(6)
+    radius: Style.cornerRadius
+    color: Color.background
+    opacity: 0.6
+    width: fpsLabel.implicitWidth + Style.space(10)
+    height: fpsLabel.implicitHeight + Style.space(4)
+
+    Text {
+      id: fpsLabel
+      textFormat: Text.PlainText
+      anchors.centerIn: parent
+      text: root.renderedFps + " fps"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
   }
 
   Rectangle {
@@ -239,6 +281,18 @@ Item {
     repeat: true
     running: root.active && !root.preferSnapshots && root.usingSnapshotFallback && root.streamUrl !== ""
     onTriggered: root.retryVideo()
+  }
+
+  Timer {
+    // One-second buckets: coarse enough to read, fine enough to notice a feed
+    // degrading. Stops with the view, so a closed feed does not report a rate.
+    interval: 1000
+    repeat: true
+    running: root.active
+    onTriggered: {
+      root._fps = root._framesThisSecond
+      root._framesThisSecond = 0
+    }
   }
 
   Timer {
