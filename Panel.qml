@@ -677,6 +677,7 @@ Panel {
                   // view dismisses this one, so the two never pull the same
                   // stream at once either.
                   active: root.opened
+                  preferSnapshots: Model.prefersSnapshots(modelData.service)
                   cameraName: printer.webcams.length > 1 ? modelData.name : ""
                   streamUrl: modelData.streamUrl
                   snapshotUrl: modelData.snapshotUrl

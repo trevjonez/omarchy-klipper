@@ -44,6 +44,18 @@ ShellRoot {
     snapshotUrl: "http://127.0.0.1:" + root.mockPort + "/webcam/?action=snapshot"
   }
 
+  // A camera whose owner configured an adaptive service is pulled frame by
+  // frame instead of being decoded as a stream, which is what keeps it live:
+  // the stream path drifts further behind the longer it runs.
+  Plugin.CameraView {
+    id: adaptive
+    width: 320
+    active: false
+    preferSnapshots: true
+    streamUrl: "http://127.0.0.1:" + root.mockPort + "/webcam/?action=stream"
+    snapshotUrl: "http://127.0.0.1:" + root.mockPort + "/webcam/?action=snapshot"
+  }
+
   Component.onCompleted: {
     // Give an inactive feed long enough that a 1fps poll would be obvious.
     h.waitFor("inactive feed settles", function() { root.refreshCount(); return root.snapshots >= 0 }, function() {
@@ -79,6 +91,25 @@ ShellRoot {
     }
   }
 
+  property int adaptiveBaseline: 0
+
+  Timer {
+    // Long enough that a once-a-second fallback could not reach the count an
+    // adaptive feed does, so the assertion is about the pace, not luck.
+    id: adaptiveTimer
+    interval: 2000
+    onTriggered: {
+      adaptive.active = false
+      root.refreshCount()
+      h.waitFor("adaptive count read back", function() { return !counter.running }, function() {
+        var pulled = root.snapshots - root.adaptiveBaseline
+        h.check("an adaptive camera pulls frames far faster than the fallback", pulled >= 5,
+                "pulled " + pulled + " in 2s")
+        h.done()
+      })
+    }
+  }
+
   Timer {
     id: stopTimer
     property int settled: 0
@@ -89,7 +120,11 @@ ShellRoot {
         h.check("no polling after it closes again", root.snapshots <= stopTimer.settled + 1,
                 "was " + stopTimer.settled + ", now " + root.snapshots)
 
-        h.done()
+        h.check("an adaptive camera never opens the stream", adaptive.usingSnapshotFallback,
+                "usingSnapshotFallback = " + adaptive.usingSnapshotFallback)
+        adaptiveBaseline = root.snapshots
+        adaptive.active = true
+        adaptiveTimer.start()
       })
     }
   }

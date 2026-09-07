@@ -29,7 +29,18 @@ Item {
   // instances at once, which is enough load to make a Pi's camera service
   // start answering 502 to the view that *is* on screen.
   property bool active: true
-  property bool usingSnapshotFallback: streamUrl === ""
+  // Set from the camera's own configured service. An adaptive camera is meant
+  // to be pulled one snapshot at a time; the stream path is not just slower
+  // for it, it drifts further behind the longer it runs (see
+  // Model.prefersSnapshots).
+  property bool preferSnapshots: false
+  // Floor between snapshot requests, not a period -- the next one is asked
+  // for when the last has arrived. 10/s for a camera we are pulling on
+  // purpose; once a second when this is the degraded path after video failed,
+  // where the point is to stay readable without loading a sick camera.
+  readonly property int snapshotMinIntervalMs: preferSnapshots ? 100 : 1000
+
+  property bool usingSnapshotFallback: preferSnapshots || streamUrl === ""
   property bool videoReady: false
   property int snapshotCounter: 0
   // True once any snapshot has rendered. The placeholder is gated on this
@@ -54,6 +65,16 @@ Item {
     else snapshotA.source = url
   }
 
+  // Requests the next frame, immediately or after the floor has elapsed. The
+  // loop is driven by frames arriving rather than by a fixed cadence, so
+  // requests never overlap and a slow link costs frame rate instead of
+  // queueing up work whose answer is already stale by the time it lands.
+  function scheduleSnapshot(immediate) {
+    if (!active || !usingSnapshotFallback || snapshotUrl === "") return
+    if (immediate) refreshSnapshot()
+    else if (!snapshotGap.running) snapshotGap.restart()
+  }
+
   function presentSnapshot(isA) {
     frontIsA = isA
     hasSnapshot = true
@@ -75,7 +96,8 @@ Item {
     // thing to show for the second it takes than the placeholder is.
     retryingVideo = false
     videoReady = false
-    usingSnapshotFallback = streamUrl === ""
+    usingSnapshotFallback = preferSnapshots || streamUrl === ""
+    scheduleSnapshot(true)
   }
 
   function fallBackToSnapshot() {
@@ -91,6 +113,7 @@ Item {
   // the panel happens to be rebuilt is the wrong trade. Retry periodically
   // instead, without disturbing what is on screen.
   function retryVideo() {
+    if (preferSnapshots) return
     if (!usingSnapshotFallback || streamUrl === "" || retryingVideo) return
     retryingVideo = true
     videoReady = false
@@ -126,7 +149,10 @@ Item {
       fillMode: Image.PreserveAspectFit
       cache: false
       asynchronous: true
-      onStatusChanged: if (status === Image.Ready) root.presentSnapshot(true)
+      onStatusChanged: {
+        if (status === Image.Ready) root.presentSnapshot(true)
+        if (status === Image.Ready || status === Image.Error) root.scheduleSnapshot(false)
+      }
     }
 
     Image {
@@ -136,7 +162,10 @@ Item {
       fillMode: Image.PreserveAspectFit
       cache: false
       asynchronous: true
-      onStatusChanged: if (status === Image.Ready) root.presentSnapshot(false)
+      onStatusChanged: {
+        if (status === Image.Ready) root.presentSnapshot(false)
+        if (status === Image.Ready || status === Image.Error) root.scheduleSnapshot(false)
+      }
     }
   }
 
@@ -208,16 +237,20 @@ Item {
     id: videoRetryTimer
     interval: 30000
     repeat: true
-    running: root.active && root.usingSnapshotFallback && root.streamUrl !== ""
+    running: root.active && !root.preferSnapshots && root.usingSnapshotFallback && root.streamUrl !== ""
     onTriggered: root.retryVideo()
   }
 
   Timer {
-    id: snapshotTimer
-    interval: 1000
-    repeat: true
-    running: root.active && root.usingSnapshotFallback && root.snapshotUrl !== ""
-    triggeredOnStart: true
+    id: snapshotGap
+    interval: root.snapshotMinIntervalMs
+    repeat: false
     onTriggered: root.refreshSnapshot()
   }
+
+  // Entering snapshot mode -- at startup, on an adaptive camera, or after
+  // video gave up -- starts the loop; every later frame reschedules it.
+  onUsingSnapshotFallbackChanged: if (usingSnapshotFallback) scheduleSnapshot(true)
+  onSnapshotUrlChanged: scheduleSnapshot(true)
+  Component.onCompleted: scheduleSnapshot(true)
 }

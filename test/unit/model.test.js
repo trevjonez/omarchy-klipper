@@ -372,6 +372,27 @@ test('snapshot cache-buster', () => {
                   M.snapshotUrlWithCacheBust('http://h/s', 2));
 });
 
+test('a camera configured adaptive is pulled as snapshots, not decoded as a stream', () => {
+  // An MJPEG stream carries no timestamps, so the demuxer invents a 25fps
+  // clock; a camera pushing more than that leaves the player further behind
+  // every second it runs. Snapshots always return the newest frame instead.
+  assert.equal(M.prefersSnapshots('mjpegstreamer-adaptive'), true);
+  assert.equal(M.prefersSnapshots('mjpegstreamer'), false);
+  assert.equal(M.prefersSnapshots(''), false);
+  assert.equal(M.prefersSnapshots(undefined), false, 'a camera that says nothing keeps the stream');
+
+  // The mode has to survive both the live reply and the cached copy, or it
+  // would be honoured until the next restart and then quietly lost.
+  const printer = { host: 'voron.lan', port: 7125, scheme: 'http' };
+  const live = M.parseWebcamsResponse(JSON.stringify({ result: { webcams: [{
+    name: 'AngryCam', enabled: true, service: 'mjpegstreamer-adaptive',
+    stream_url: '/webcam/?action=stream', snapshot_url: '/webcam/?action=snapshot',
+  }] } }), printer, 'http');
+  assert.equal(live[0].service, 'mjpegstreamer-adaptive');
+  const cached = M.normalizePrinter({ id: 'p1', host: 'voron.lan', webcams: live });
+  assert.equal(cached.webcams[0].service, 'mjpegstreamer-adaptive');
+});
+
 test('websocketUrl carries the api key as a query token', () => {
   // Headers cannot be set on a QML WebSocket, so the key has to ride the URL.
   const p = { host: 'voron.lan', port: 7125, scheme: 'http', apiKey: 'secret key' };

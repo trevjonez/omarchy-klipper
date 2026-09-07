@@ -85,6 +85,7 @@ PanelWindow {
     width: Math.min(parent.width, parent.height / ratio)
 
     active: root.open
+    preferSnapshots: root.webcam ? Model.prefersSnapshots(root.webcam.service) : false
     cameraName: ""
     streamUrl: root.webcam ? root.webcam.streamUrl : ""
     snapshotUrl: root.webcam ? root.webcam.snapshotUrl : ""

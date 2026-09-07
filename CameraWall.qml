@@ -138,6 +138,7 @@ PanelWindow {
         CameraView {
           id: feed
           active: root.open
+          preferSnapshots: Model.prefersSnapshots(tile.modelData.webcam.service)
           anchors.centerIn: parent
           readonly property real ratio: tile.modelData.webcam.aspectRatio > 0
             ? tile.modelData.webcam.aspectRatio : 0.75

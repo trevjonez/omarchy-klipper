@@ -613,6 +613,7 @@ function parseWebcamsResponse(raw, printer, scheme) {
         name: remoteText(cam.name, 64) || "Camera",
         streamUrl: streamUrl,
         snapshotUrl: resolveWebcamUrl(printer, cam.snapshot_url, scheme),
+        service: remoteText(cam.service, 48),
         flipHorizontal: cam.flip_horizontal === true,
         flipVertical: cam.flip_vertical === true,
         rotation: [0, 90, 180, 270].indexOf(cam.rotation) !== -1 ? cam.rotation : 0,
@@ -637,11 +638,28 @@ function normalizeCachedWebcam(cam) {
     name: trimmed(cam.name) || "Camera",
     streamUrl: streamUrl,
     snapshotUrl: trimmed(cam.snapshotUrl),
+    service: trimmed(cam.service),
     flipHorizontal: cam.flipHorizontal === true,
     flipVertical: cam.flipVertical === true,
     rotation: [0, 90, 180, 270].indexOf(cam.rotation) !== -1 ? cam.rotation : 0,
     aspectRatio: typeof cam.aspectRatio === "number" && cam.aspectRatio > 0 ? cam.aspectRatio : 0.75
   };
+}
+
+// Which way to consume a camera, from the mode its owner configured.
+//
+// An "adaptive" service means: pull single snapshots, do not embed the
+// stream. That is not a preference, it is the fix for a real defect in the
+// stream path -- an MJPEG stream carries no timestamps, so the demuxer
+// synthesises a 25fps clock, and a camera pushing frames faster than that
+// (33fps here) leaves the player a fixed 25 frames per second behind a source
+// producing 33. The backlog grows for as long as you watch. Snapshots cannot
+// drift: every request returns the newest frame, so a slow link costs frame
+// rate instead of accumulating delay. Mainsail draws the same distinction and
+// says the same thing about it, which is why the browser looks live and this
+// did not.
+function prefersSnapshots(service) {
+  return trimmed(service).toLowerCase().indexOf("adaptive") !== -1;
 }
 
 // "4:3" -> 0.75 (height/width). Falls back to a plain 4:3 guess.
@@ -1171,6 +1189,7 @@ if (typeof module !== "undefined") {
     snapshotUrlWithCacheBust: snapshotUrlWithCacheBust,
     parseWebcamsResponse: parseWebcamsResponse,
     parseAspectRatio: parseAspectRatio,
+    prefersSnapshots: prefersSnapshots,
     normalizeDisplaySensorEntry: normalizeDisplaySensorEntry,
     cameraTiles: cameraTiles,
     gridColumnsFor: gridColumnsFor,
