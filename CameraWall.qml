@@ -137,6 +137,7 @@ PanelWindow {
         // Letterboxed within the cell, same rule as the fullscreen view.
         CameraView {
           id: feed
+          active: root.open
           anchors.centerIn: parent
           readonly property real ratio: tile.modelData.webcam.aspectRatio > 0
             ? tile.modelData.webcam.aspectRatio : 0.75

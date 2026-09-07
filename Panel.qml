@@ -673,6 +673,10 @@ Panel {
                 CameraView {
                   required property var modelData
                   width: parent.width
+                  // Closed popup, no camera traffic. Opening the fullscreen
+                  // view dismisses this one, so the two never pull the same
+                  // stream at once either.
+                  active: root.opened
                   cameraName: printer.webcams.length > 1 ? modelData.name : ""
                   streamUrl: modelData.streamUrl
                   snapshotUrl: modelData.snapshotUrl

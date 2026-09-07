@@ -84,6 +84,7 @@ PanelWindow {
     readonly property real ratio: root.webcam && root.webcam.aspectRatio > 0 ? root.webcam.aspectRatio : 0.75
     width: Math.min(parent.width, parent.height / ratio)
 
+    active: root.open
     cameraName: ""
     streamUrl: root.webcam ? root.webcam.streamUrl : ""
     snapshotUrl: root.webcam ? root.webcam.snapshotUrl : ""

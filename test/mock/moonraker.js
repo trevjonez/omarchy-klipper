@@ -195,6 +195,19 @@ const server = http.createServer((req, res) => {
     case '/printer/info':
       return json(200, { result: { hostname: 'mock-printer', state: 'ready', state_message: 'Printer is ready' } });
 
+    // The webcam itself, so a test can count what a CameraView actually
+    // fetches. A 1x1 JPEG is enough: the assertion is about how many requests
+    // arrive and when, not about pixels.
+    case '/webcam/':
+      res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+      return res.end(Buffer.from(
+        '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikx' +
+        'MC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01' +
+        'T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAAR' +
+        'CAAIAAgDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAA' +
+        'AAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAA//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAM' +
+        'AwEAAhEDEQA/AJgAwX//2Q==', 'base64'));
+
     case '/printer/objects/list':
       return json(200, { result: { objects: cfg.objects } });
 

@@ -22,7 +22,13 @@ Item {
   property real aspectRatio: 0.75 // height / width
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
-
+  // False while whatever holds this feed is closed. The popup, the camera
+  // wall and the fullscreen view all keep their CameraViews alive rather than
+  // destroying them, so without this a closed view goes on polling a snapshot
+  // every second and re-opening an MJPEG stream every 30 -- from several
+  // instances at once, which is enough load to make a Pi's camera service
+  // start answering 502 to the view that *is* on screen.
+  property bool active: true
   property bool usingSnapshotFallback: streamUrl === ""
   property bool videoReady: false
   property int snapshotCounter: 0
@@ -55,6 +61,22 @@ Item {
 
   height: width * aspectRatio
   clip: true
+
+  onActiveChanged: {
+    if (!active) {
+      retryingVideo = false
+      videoReady = false
+      player.stop()
+      return
+    }
+    // Coming back on screen is the natural moment to try video again, rather
+    // than waiting out a retry interval that started while nobody was
+    // looking. hasSnapshot deliberately survives: the last frame is a better
+    // thing to show for the second it takes than the placeholder is.
+    retryingVideo = false
+    videoReady = false
+    usingSnapshotFallback = streamUrl === ""
+  }
 
   function fallBackToSnapshot() {
     retryingVideo = false
@@ -154,7 +176,7 @@ Item {
     id: player
     // Kept loaded during a retry so the attempt can run underneath the
     // snapshot that is still being displayed.
-    source: (!root.usingSnapshotFallback || root.retryingVideo) ? root.streamUrl : ""
+    source: root.active && (!root.usingSnapshotFallback || root.retryingVideo) ? root.streamUrl : ""
     videoOutput: videoOutput
     autoPlay: true
     onPlaybackStateChanged: if (playbackState === MediaPlayer.PlayingState) root.adoptVideo()
@@ -170,12 +192,12 @@ Item {
     // waiting for a settled MediaStatus would never fire for a live source.
     id: videoWatchdog
     interval: 5000
-    running: !root.usingSnapshotFallback || root.retryingVideo
+    running: root.active && (!root.usingSnapshotFallback || root.retryingVideo)
     onTriggered: {
       if (root.videoReady) return
       // A retry that did not take just ends; the snapshot was never replaced,
       // so there is nothing to tear down and nothing flickers.
-      if (root.retryingVideo) { root.retryingVideo = false; root.player.stop() }
+      if (root.retryingVideo) { root.retryingVideo = false; player.stop() }
       else root.fallBackToSnapshot()
     }
   }
@@ -186,7 +208,7 @@ Item {
     id: videoRetryTimer
     interval: 30000
     repeat: true
-    running: root.usingSnapshotFallback && root.streamUrl !== ""
+    running: root.active && root.usingSnapshotFallback && root.streamUrl !== ""
     onTriggered: root.retryVideo()
   }
 
@@ -194,7 +216,7 @@ Item {
     id: snapshotTimer
     interval: 1000
     repeat: true
-    running: root.usingSnapshotFallback && root.snapshotUrl !== ""
+    running: root.active && root.usingSnapshotFallback && root.snapshotUrl !== ""
     triggeredOnStart: true
     onTriggered: root.refreshSnapshot()
   }
