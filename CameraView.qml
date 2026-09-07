@@ -35,10 +35,19 @@ Item {
   // Model.prefersSnapshots).
   property bool preferSnapshots: false
   // Floor between snapshot requests, not a period -- the next one is asked
-  // for when the last has arrived. 10/s for a camera we are pulling on
-  // purpose; once a second when this is the degraded path after video failed,
-  // where the point is to stay readable without loading a sick camera.
-  readonly property int snapshotMinIntervalMs: preferSnapshots ? 100 : 1000
+  // for when the last has arrived, so the achieved rate is this plus the
+  // ~15ms a frame costs to fetch and decode.
+  //
+  // 25ms lands around 30/s, which is roughly what the camera captures.
+  // Higher is measurably possible -- no floor at all reaches 90/s -- and
+  // pointless: past the capture rate the same frame comes back twice, at full
+  // price. Latency does not move with any of this, because a request is only
+  // ever issued once the last frame is in hand and each one returns whatever
+  // is current; the rate buys smoothness, not freshness.
+  //
+  // A second, when this is the degraded path after video failed, is about
+  // staying readable without loading a camera that is already unwell.
+  property int snapshotMinIntervalMs: preferSnapshots ? 25 : 1000
 
   property bool usingSnapshotFallback: preferSnapshots || streamUrl === ""
   property bool videoReady: false

@@ -140,6 +140,11 @@ PanelWindow {
           active: root.open
           showFps: true
           preferSnapshots: Model.prefersSnapshots(tile.modelData.webcam.service)
+          // Every tile pulls its own full-size frames, so the wall costs the
+          // sum of them. A grid is for watching several printers at once, not
+          // for watching any one of them closely -- that is what clicking a
+          // tile is for -- so each feed takes a slower share.
+          snapshotMinIntervalMs: 100
           anchors.centerIn: parent
           readonly property real ratio: tile.modelData.webcam.aspectRatio > 0
             ? tile.modelData.webcam.aspectRatio : 0.75
